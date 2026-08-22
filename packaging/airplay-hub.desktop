@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AirPlay Hub
+GenericName=Multiroom audio
+Comment=Send your machine's audio to several AirPlay speakers at once
+Exec=airplay-hub
+Icon=airplay-hub
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=airplay;multiroom;speakers;homepod;volumio;shairport;
+StartupWMClass=main.py

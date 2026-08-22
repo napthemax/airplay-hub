@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Skapas lokalt av install.sh, hör inte hemma i repot
+*.log

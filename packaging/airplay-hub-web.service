@@ -1,0 +1,13 @@
+[Unit]
+Description=AirPlay Hub — web interface for your phone
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=__INSTALL_DIR__/airplay-hub-web
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
