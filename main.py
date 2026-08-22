@@ -622,16 +622,18 @@ ICON = Path(__file__).resolve().parent / "packaging" / "airplay-hub.svg"
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("AirPlay Hub")
-    app.setDesktopFileName("airplay-hub")
 
-    # Qt looks for an icon theme even though this window draws its own symbols,
-    # and on desktops where none is configured it falls back to hunting for
-    # "gnome" - which prints "kf.iconthemes: Icon theme \"gnome\" not found."
-    # on every start. Naming a theme that is part of the freedesktop standard,
-    # and therefore always present, stops the search.
-    if not QIcon.themeName():
-        QIcon.setThemeName("hicolor")
-    QIcon.setFallbackThemeName("hicolor")
+    # Deliberately NOT calling setDesktopFileName(). Qt then tries to register
+    # the app with the desktop portal, which only succeeds when it was launched
+    # from its .desktop entry - starting it from a terminal prints
+    # "Failed to register with host portal ... App info not found". The name
+    # buys nothing here and the warning is pure noise.
+    #
+    # Nor setting an icon theme. A "kf.iconthemes: Icon theme X not found"
+    # warning comes from the user's own theme inheriting a theme that is not
+    # installed - check `Inherits=` in its index.theme. Overriding the theme
+    # from inside the app would silence the message by changing how every icon
+    # looks, which is not ours to do.
 
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))

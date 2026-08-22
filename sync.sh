@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Keeps the rooms in phase with each other.
 #
-#   ./sync.sh          show how things stand
-#   ./sync.sh +100     make the PipeWire rooms 100 ms later
-#   ./sync.sh -100     make them 100 ms earlier
+#   ./sync.sh              show how things stand
+#   ./sync.sh +100         make the PipeWire rooms 100 ms later
+#   ./sync.sh -100         make them 100 ms earlier
+#   ./sync.sh owntone 500  set OwnTone's start_buffer_ms (needs sudo)
+#
+# Which side to turn: delaying the PipeWire rooms only helps when they run
+# AHEAD. If the OwnTone room is the late one and the slider in the app has
+# already bottomed out, its buffer is what has to come down - that is the
+# owntone subcommand.
 #
 # The two engines buffer different amounts, and the difference is audible as an
 # echo between rooms. OwnTone rooms (HomePod, Apple TV) are governed by
@@ -98,6 +104,27 @@ for o in [o for o in outs if o.get('offset_ms')]:
 }
 
 if [ $# -eq 0 ]; then
+  show
+  exit 0
+fi
+
+if [ "$1" = "owntone" ]; then
+  want=${2:-}
+  case "$want" in
+    ''|*[!0-9]*) echo "Usage: ./sync.sh owntone <milliseconds>, e.g. 500" >&2; exit 1 ;;
+  esac
+  echo "start_buffer_ms: $(ot_ms) -> $want"
+  # The line ships commented out; handle both that and an already-set value.
+  if grep -qE '^[[:space:]]*start_buffer_ms[[:space:]]*=' /etc/owntone.conf; then
+    sudo sed -i "s/^\([[:space:]]*\)start_buffer_ms[[:space:]]*=.*/\1start_buffer_ms = $want/" /etc/owntone.conf
+  else
+    sudo sed -i "s/^#\([[:space:]]*\)start_buffer_ms[[:space:]]*=.*/\1start_buffer_ms = $want/" /etc/owntone.conf
+  fi
+  grep -qE "^[[:space:]]*start_buffer_ms[[:space:]]*=[[:space:]]*$want" /etc/owntone.conf \
+    || { echo "Could not set it - edit /etc/owntone.conf by hand" >&2; exit 1; }
+  sudo systemctl restart owntone
+  sleep 4
+  echo "OwnTone restarted. Its rooms need switching on again in the app."
   show
   exit 0
 fi

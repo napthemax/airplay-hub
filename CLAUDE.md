@@ -206,8 +206,19 @@ holding back a room that runs AHEAD.
 
 That is also why the HomePod stayed half a second behind with both engines
 matched to ~2250 ms on paper: the device adds its own buffering downstream of
-everything we can measure, and the only lever that reaches it is making
-everything else later. PipeWire has no
+everything we can measure.
+
+**Delaying the PipeWire rooms does not fix a late OwnTone room.** It was tried,
++500 then +150, and the gap got worse rather than better — from half a second to
+a couple of seconds. Whatever `sess.latency.msec` does to a shairport-sync
+receiver, it does not move it the way the arithmetic in `sync.sh` assumes. Do
+not trust the "difference" figure for cross-engine work; it is a baseline, not a
+prediction.
+
+When the OwnTone room is the late one and its slider has bottomed out, the
+buffer to reduce is OwnTone's own: `./sync.sh owntone <ms>` sets
+`start_buffer_ms` in `/etc/owntone.conf` and restarts the service. Default is
+2250; the config file notes that 500 usually works. PipeWire has no
 equivalent worth trusting — `latency_msec` on the loopback can be set but
 PipeWire still picks its own period size (asked for 400, got 133), so those
 rooms are shifted together with `sync.sh` instead. That is good enough, since
