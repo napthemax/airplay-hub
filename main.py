@@ -193,8 +193,11 @@ class InfoDialog(QDialog):
         col.addWidget(rubrik)
 
         hjalp = QLabel(
-            "Play music in several rooms and drag while listening. "
-            "If this room lags behind — drag left."
+            "Play music in several rooms and drag while listening.\n"
+            "Only works for a room that is AHEAD of the others — drag right to "
+            "hold it back. A room that lags behind cannot be pulled forward; "
+            "there is no earlier audio to play. Delay the other rooms with "
+            "./sync.sh instead."
         )
         hjalp.setStyleSheet("color: #6f8299; font-size: 11px;")
         hjalp.setWordWrap(True)
@@ -202,8 +205,11 @@ class InfoDialog(QDialog):
 
         rad = QHBoxLayout()
         rad.setSpacing(9)
-        tidigare = QLabel("earlier")
+        tidigare = QLabel("earlier\n(limited)")
         tidigare.setStyleSheet("color: #55697d; font-size: 10px;")
+        tidigare.setToolTip(
+            "Limited by the buffer. Push too far and the audio clips, then stops."
+        )
         rad.addWidget(tidigare)
 
         self.offset = QSlider(Qt.Orientation.Horizontal)

@@ -192,7 +192,22 @@ the room is on, which costs a short gap in that room. That is why it happens on
 slider release and not while dragging.
 
 This was a real bug, found because the slider appeared dead: -2000, 0 and +2000
-all sounded identical. PipeWire has no
+all sounded identical.
+
+**And the slider only works in one direction.** Negative offset means "play
+earlier", but OwnTone feeds the stream from the fifo in real time — there is no
+earlier audio to play. Instead it eats into the buffer, and when that runs out
+the sound clips and then stops entirely. Measured on a HomePod: clipping around
+-1850 ms, silence at -2000.
+
+So a room that LAGS cannot be pulled forward. It is already as early as it can
+be. Delay the other rooms instead, with `./sync.sh +N`. The slider is for
+holding back a room that runs AHEAD.
+
+That is also why the HomePod stayed half a second behind with both engines
+matched to ~2250 ms on paper: the device adds its own buffering downstream of
+everything we can measure, and the only lever that reaches it is making
+everything else later. PipeWire has no
 equivalent worth trusting — `latency_msec` on the loopback can be set but
 PipeWire still picks its own period size (asked for 400, got 133), so those
 rooms are shifted together with `sync.sh` instead. That is good enough, since
