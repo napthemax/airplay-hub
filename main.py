@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import sys
 from functools import partial
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -608,8 +610,26 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+ICON = Path(__file__).resolve().parent / "packaging" / "airplay-hub.svg"
+
+
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setApplicationName("AirPlay Hub")
+    app.setDesktopFileName("airplay-hub")
+
+    # Qt looks for an icon theme even though this window draws its own symbols,
+    # and on desktops where none is configured it falls back to hunting for
+    # "gnome" - which prints "kf.iconthemes: Icon theme \"gnome\" not found."
+    # on every start. Naming a theme that is part of the freedesktop standard,
+    # and therefore always present, stops the search.
+    if not QIcon.themeName():
+        QIcon.setThemeName("hicolor")
+    QIcon.setFallbackThemeName("hicolor")
+
+    if ICON.exists():
+        app.setWindowIcon(QIcon(str(ICON)))
+
     app.setStyleSheet(STYLE)
     window = MainWindow()
     window.show()

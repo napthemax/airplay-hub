@@ -174,7 +174,25 @@ invisible from this side. The last stretch has to be done by ear.
 
 Hence `offset_ms` per room: OwnTone's API takes `-2000` to `2000` ms on each
 output, positive meaning later. It is reached from the info button on the room's
-row, with a slider that shifts the room while the music plays. PipeWire has no
+row.
+
+**Setting offset_ms is not the same as making it take effect.** OwnTone reads it
+exactly once, in `session_make()` (`src/outputs/airplay.c`, and the same in
+`raop.c`):
+
+```c
+session->offset_samples = device->offset_ms * device->quality.sample_rate / 1000;
+```
+
+After that the session only carries `offset_samples`. Change `offset_ms` while a
+room is playing and *nothing happens* — the API accepts the value, stores it and
+reports it back, and the sound does not move. It lands the next time a session
+is built. `rooms.set_offset()` therefore deselects and reselects the output when
+the room is on, which costs a short gap in that room. That is why it happens on
+slider release and not while dragging.
+
+This was a real bug, found because the slider appeared dead: -2000, 0 and +2000
+all sounded identical. PipeWire has no
 equivalent worth trusting — `latency_msec` on the loopback can be set but
 PipeWire still picks its own period size (asked for 400, got 133), so those
 rooms are shifted together with `sync.sh` instead. That is good enough, since
@@ -305,3 +323,7 @@ menu entry, no terminal requirement, everything set up by a script.
   above lived in the app, not in the engine, and were therefore invisible from
   the command line. That something works by hand says nothing about whether it
   works in the GUI.
+- An API that accepts a value and reads it back is not proof that the value does
+  anything. `offset_ms` stored perfectly and changed nothing until the session
+  was rebuilt. When a setting seems dead, check when the engine actually reads
+  it — the source is the fastest answer.

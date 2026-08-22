@@ -19,6 +19,7 @@ admits one sender at a time anyway. Hence: one row per room, one engine per room
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 import bridge
@@ -229,11 +230,36 @@ def set_on(room: Room, on: bool) -> None:
         pwhub.route_off(room.target)
 
 
+# How long OwnTone needs between dropping a session and accepting a new one.
+# Shorter and the speaker sometimes answers the ANNOUNCE with 453 Not Enough
+# Bandwidth, because the old session has not been torn down yet.
+_RESELECT_PAUSE = 0.4
+
+
 def set_offset(room: Room, offset_ms: int) -> None:
-    """Shift a room in time. Positive = later, negative = earlier."""
+    """Shift a room in time. Positive = later, negative = earlier.
+
+    The value has to be stored *and* made to take effect, and those are two
+    different things. OwnTone reads offset_ms exactly once, in session_make():
+
+        session->offset_samples = device->offset_ms * quality.sample_rate / 1000
+
+    After that the session only carries offset_samples, so changing offset_ms
+    while a room is playing does nothing at all — the API accepts it, stores it,
+    reports it back, and the sound never moves. It only lands the next time a
+    session is built.
+
+    So if the room is on, take it off and on again. That costs a short gap in
+    that room, which is why it happens when the slider is released rather than
+    while it is being dragged.
+    """
     if not room.can_offset:
         raise ValueError(f"{room.name} cannot be trimmed from here")
     owntone.set_offset(room.target, offset_ms)
+    if room.on:
+        owntone.select(room.target, False)
+        time.sleep(_RESELECT_PAUSE)
+        owntone.select(room.target, True)
 
 
 def send_pin(room: Room, pin: str) -> None:
