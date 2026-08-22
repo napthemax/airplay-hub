@@ -126,17 +126,22 @@ finally:
     ok "responding - open http://$address:8730 on your phone"
     # Reaching it from here proves nothing about reaching it from a phone: a
     # firewall drops outside traffic silently and the browser just times out.
-    # ufw status needs root; the unit state does not, and is enough to warn on.
+    # Reading the rules needs root, so do not claim the port is closed - say
+    # what could not be checked. A check that cries wolf gets ignored.
     if systemctl is-active --quiet ufw 2>/dev/null; then
-      if sudo -n ufw status 2>/dev/null | grep -q 8730; then
-        ok "ufw allows port 8730"
+      if sudo -n true 2>/dev/null; then
+        if sudo -n ufw status 2>/dev/null | grep -q 8730; then
+          ok "ufw allows port 8730"
+        else
+          bad "ufw is active and has no rule for 8730 - your phone will time out:"
+          subnet=$(ip -4 route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}')
+          echo "         sudo ufw allow from ${subnet:-192.168.1.0/24} to any port 8730 proto tcp"
+        fi
       else
-        warn "ufw is active - your phone will time out unless 8730 is open:"
-        subnet=$(ip -4 route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}')
-        echo "         sudo ufw allow from ${subnet:-192.168.1.0/24} to any port 8730 proto tcp"
+        ok "ufw is active (rules need sudo to read - if the phone times out, open 8730)"
       fi
     elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-      warn "firewalld is active - check that port 8730 is open in your home zone"
+      ok "firewalld is active (if the phone times out, open 8730 in your home zone)"
     fi
   else
     bad "service running but not responding  ->  journalctl --user -u airplay-hub-web -n 20"
