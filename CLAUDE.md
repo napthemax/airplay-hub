@@ -226,8 +226,14 @@ What is left to try, in falling order of likely effect:
 
 `install.sh` is the only way in for a new user. It checks system packages, runs
 `setup-owntone.sh` if needed, puts `raop-discover.conf` in place, writes two
-launchers in `~/.local/bin`, installs the menu entry and icon, and enables the
-web interface as a systemd user service.
+launchers in `~/.local/bin`, installs the menu entry and icon, enables the web
+interface as a systemd user service, and offers to put `~/.local/bin` on PATH.
+
+That last part is per shell, and they do not agree: fish keeps PATH in a
+universal variable and is handled with `fish_add_path -g`, while zsh and bash
+get a guarded block appended to their rc file. Note that `zsh -l -c` and
+`bash -l -c` do **not** read `.zshrc`/`.bashrc` — only interactive shells do, so
+test with `-i -c` or the fix looks broken when it is not.
 
 AppImage was rejected deliberately. It can bundle Python and PyQt6, but not
 PipeWire, `parec` or OwnTone — and those are the awkward ones. An AppImage would

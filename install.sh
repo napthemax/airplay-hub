@@ -156,10 +156,45 @@ gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" 2>/dev/null || tru
 echo "  airplay-hub and airplay-hub-web in $BIN"
 echo "  menu entry and icon installed"
 
-case ":$PATH:" in
-  *":$BIN:"*) ;;
-  *) yellow "  Note: $BIN is not in PATH. The menu entry works regardless." ;;
-esac
+# The menu entry calls the full path and works regardless, but a terminal will
+# not find `airplay-hub` unless ~/.local/bin is on PATH. Offer to fix it for
+# whichever shells are actually installed - fish keeps PATH in a universal
+# variable, the others in an rc file.
+path_marker="# Added by airplay-hub"
+path_block="
+$path_marker — put ~/.local/bin on PATH if it is not there already
+case \":\$PATH:\" in
+  *\":\$HOME/.local/bin:\"*) ;;
+  *) export PATH=\"\$HOME/.local/bin:\$PATH\" ;;
+esac"
+
+add_to_rc() {
+  local rc=$1
+  [ -e "$rc" ] || return 0
+  if grep -q "$path_marker" "$rc" 2>/dev/null; then
+    echo "  $(basename "$rc"): already set"
+  else
+    printf '%s\n' "$path_block" >> "$rc"
+    echo "  $(basename "$rc"): PATH added"
+  fi
+}
+
+if ! printf '%s' ":$PATH:" | grep -q ":$BIN:"; then
+  echo
+  yellow "$BIN is not on your PATH."
+  echo "The menu entry works anyway, but typing 'airplay-hub' in a terminal will not."
+  read -rp "Add it to your shell configuration? [Y/n] " answer
+  if [[ ! "$answer" =~ ^[nN]$ ]]; then
+    add_to_rc "$HOME/.zshrc"
+    add_to_rc "$HOME/.bashrc"
+    if command -v fish >/dev/null 2>&1; then
+      # fish_add_path is idempotent and writes a universal variable, so it
+      # survives without touching config.fish.
+      fish -c "fish_add_path -g $BIN" 2>/dev/null && echo "  fish: PATH added"
+    fi
+    echo "  Open a new terminal for it to take effect."
+  fi
+fi
 
 # ------------------------------------------------------- 5. the web service
 blue "5/5  The web interface as a service"
