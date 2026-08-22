@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- A house with sound filling it: multiroom audio, not one speaker.
+     Kept to three shapes so it survives down to 24 px in a menu. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <rect width="128" height="128" rx="28" fill="#1b2733"/>
-  <!-- Tre rum som tar emot samma ljud -->
-  <g fill="none" stroke="#2f8fd8" stroke-width="7" stroke-linecap="round">
-    <path d="M39 74a26 26 0 0 1 50 0"/>
-    <path d="M27 86a39 39 0 0 1 74 0" opacity=".55"/>
-    <path d="M15 98a52 52 0 0 1 98 0" opacity=".28"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#31485f"/>
+      <stop offset="1" stop-color="#141d26"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="29" fill="url(#bg)"/>
+  <path d="M64 26 L102 57 L102 100 A5 5 0 0 1 97 105 L31 105 A5 5 0 0 1 26 100 L26 57 Z"
+        fill="none" stroke="#8fb4d4" stroke-width="5" stroke-linejoin="round" opacity=".45"/>
+  <g fill="none" stroke="#4aa8ec" stroke-linecap="round">
+    <path d="M50 86 A18 18 0 0 1 78 86" stroke-width="7"/>
+    <path d="M40 76 A32 32 0 0 1 88 76" stroke-width="7" opacity=".55"/>
   </g>
-  <circle cx="64" cy="42" r="11" fill="#dbe6f0"/>
+  <circle cx="64" cy="92" r="7.5" fill="#ffffff"/>
 </svg>

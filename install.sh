@@ -150,7 +150,12 @@ EOF
 chmod +x "$BIN/airplay-hub-web"
 
 cp "$SRC/packaging/airplay-hub.svg" "$ICONS/"
-cp "$SRC/packaging/airplay-hub.desktop" "$APPS/"
+# The menu launches applications without ~/.local/bin on PATH, so Exec has to be
+# absolute or KDE reports "could not find the program". Icon likewise: an
+# absolute path works no matter which icon theme is active or how stale its
+# cache is.
+sed -e "s|__BIN__|$BIN|" -e "s|__ICON__|$ICONS/airplay-hub.svg|" \
+  "$SRC/packaging/airplay-hub.desktop" > "$APPS/airplay-hub.desktop"
 update-desktop-database "$APPS" 2>/dev/null || true
 gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 echo "  airplay-hub and airplay-hub-web in $BIN"

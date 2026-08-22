@@ -218,7 +218,23 @@ prediction.
 When the OwnTone room is the late one and its slider has bottomed out, the
 buffer to reduce is OwnTone's own: `./sync.sh owntone <ms>` sets
 `start_buffer_ms` in `/etc/owntone.conf` and restarts the service. Default is
-2250; the config file notes that 500 usually works. PipeWire has no
+2250; the config file notes that 500 usually works.
+
+**But both ways of making a HomePod earlier draw on the same buffer**, so they
+fight each other. `start_buffer_ms = 1250` clipped on its own, and offset -2000
+against the 2250 default clipped too — 250 ms of headroom is not enough. The
+buffer has to be big enough to absorb the offset: **raise start_buffer_ms so
+that `start_buffer_ms - |offset|` stays around 500 ms.** With offset -2000 that
+means roughly 2500, which is what it now runs at.
+
+The practical recipe for a HomePod that lags, in order:
+
+1. `start_buffer_ms` high enough that the offset does not clip (offset + ~500)
+2. the room's slider at the bottom, -2000
+3. `./sync.sh +N` until the PipeWire rooms meet it
+
+That lands around 3200 ms end to end. It is a lot of latency, and it shows when
+starting playback, but it is what an AirPlay 2 speaker costs. PipeWire has no
 equivalent worth trusting — `latency_msec` on the loopback can be set but
 PipeWire still picks its own period size (asked for 400, got 133), so those
 rooms are shifted together with `sync.sh` instead. That is good enough, since
