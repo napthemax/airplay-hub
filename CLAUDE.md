@@ -66,8 +66,7 @@ the phone gets it for free.
 | `owntone-bridge.sh` | fifo + `parec` by hand; `--install-unit` writes a user unit |
 | `setup-owntone.sh` | Makes OwnTone ready: pipe_autostart, log, fifo, PTP, start |
 | `debug-owntone.sh` | Switches OwnTone to debug logging; `off` goes back |
-| `raop-discover.conf` | Latency for every discovered AirPlay sink |
-| `sync.sh` | Shows and adjusts the phase between the engines' rooms |
+| `sync.sh` | Shows timing state; adjusts OwnTone's start_buffer_ms |
 | `install.sh` | Install: packages, OwnTone, menu entry, web service |
 | `packaging/` | .desktop, icon and systemd unit that install.sh puts in place |
 | `README.md` | Installation and troubleshooting for the user |
@@ -124,11 +123,8 @@ Open:
    play to them (FairPlay). Switch one of those on in the PipeWire path and it
    takes the RTSP session, leaving OwnTone with `ANNOUNCE request failed in
    session startup: 453 Not Enough Bandwidth` — which in RAOP means "busy".
-   `rooms.py` picks one engine per room, which covers the normal case. What
-   remains is that `module-raop-discover` is now loaded from
-   `raop-discover.conf` and therefore cannot be unloaded at runtime: `pactl
-   unload-module` answers `Access denied` for anything that came from a config
-   file rather than from `pactl`.
+   `rooms.py` picks one engine per room, which covers the normal case. Resolved 2026-08-22: discovery is loaded by the app via `pactl`
+   (`pwhub.ensure_raop_discover()`), so it can be unloaded at runtime again.
 2. **AirPort Express is being phased out entirely.** The porch A1392 is already
    replaced by a Raspberry Pi 3 with Volumio. Gen 1 (A1264) and the remaining
    Express units are to be sold and replaced by Pi + Volumio everywhere. That
@@ -136,8 +132,7 @@ Open:
    shairport-sync announces `et=0,1` and is discovered automatically.
 3. A pair of Raspberry Pi 4 (1 GB) are on order for the remaining rooms. Expect
    the same power-supply trap as on the Pi 3 — do not skimp on the adapter.
-4. Nothing may be hardcoded. Right now no addresses appear in the code at all:
-   `raop-discover.conf` matches every device with `raop.ip = "~.*"`, and the
+4. Nothing may be hardcoded. No addresses appear in the code at all — the
    concrete addresses live only in this file as notes. Keep it that way.
 
 ## The rooms must stay in phase
@@ -285,9 +280,10 @@ What is left to try, in falling order of likely effect:
 ## Installation and packaging
 
 `install.sh` is the only way in for a new user. It checks system packages, runs
-`setup-owntone.sh` if needed, puts `raop-discover.conf` in place, writes two
-launchers in `~/.local/bin`, installs the menu entry and icon, enables the web
-interface as a systemd user service, and offers to put `~/.local/bin` on PATH.
+`setup-owntone.sh` if needed, removes any stale `raop-discover.conf` from older
+installs (the app loads discovery itself now), writes two launchers in
+`~/.local/bin`, installs the menu entry and icon, enables the web interface as
+a systemd user service, and offers to put `~/.local/bin` on PATH.
 
 That last part is per shell, and they do not agree: fish keeps PATH in a
 universal variable and is handled with `fish_add_path -g`, while zsh and bash
@@ -343,6 +339,22 @@ menu entry, no terminal requirement, everything set up by a script.
   but the system's: PipeWire with `pipewire-zeroconf`, `parec`, avahi and a
   configured OwnTone. None of that goes into an AppImage. The result would be an
   app that starts and is silent — use `install.sh` instead.
+- **Do not override sess.latency.msec on RAOP sinks.** It looked like the
+  obvious lever for cross-engine sync, and it silences shairport-sync
+  receivers: the session comes up, Volumio reports play, `samplerate` stays
+  empty, no audio comes out, and eventually PipeWire logs
+  `timestamp: expected ... != actual` and drops the sink entirely. Verified by
+  removing the override — audio returned immediately at defaults. Discovery is
+  therefore loaded by the app itself via `pactl` (see
+  `pwhub.ensure_raop_discover()`), never from a config file, which also means
+  it CAN be unloaded at runtime.
+- **OwnTone → shairport-sync is silent.** The very first test of this project
+  (Kitchen via OwnTone, "state: play", Volumio confirming the stream, no sound)
+  was never a configuration error — that path simply does not produce audio on
+  shairport-sync receivers, while the same engine drives HomePods fine. The
+  engine rule in rooms.py (AirPlay 1 -> PipeWire) is a functional requirement,
+  not a preference. list_rooms() self-heals discovery so the silent fallback
+  cannot happen quietly.
 - **FairPlay cannot be worked around.** `et=0,3,5` in the TXT record means
   PipeWire can never reach the device. HomeKit pairing does not help; the
   pairing must be done by the sender, and OwnTone is the one that can.

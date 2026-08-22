@@ -124,11 +124,17 @@ else
 fi
 
 # ------------------------------------------------------------- 3. PipeWire
-blue "3/5  Latency setting for AirPlay devices"
-mkdir -p "$PWCONF"
-if cp "$SRC/raop-discover.conf" "$PWCONF/"; then
-  echo "  placed raop-discover.conf in $PWCONF"
+blue "3/5  PipeWire cleanup"
+# Earlier versions installed a raop-discover.conf with a sess.latency.msec
+# override. That override silences shairport-sync receivers (sessions come up,
+# no audio comes out), and a config-file module cannot be unloaded at runtime.
+# The app now loads RAOP discovery itself, with defaults, via pactl.
+if [ -f "$PWCONF/raop-discover.conf" ]; then
+  rm -f "$PWCONF/raop-discover.conf"
   systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+  echo "  removed old raop-discover.conf (the app handles discovery itself now)"
+else
+  echo "  nothing to do — the app handles discovery itself"
 fi
 
 # ------------------------------------------------------------ 4. launchers

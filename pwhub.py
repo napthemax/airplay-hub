@@ -181,6 +181,25 @@ def load_raop_discover() -> None:
     run(["pactl", "load-module", "module-raop-discover"])
 
 
+def ensure_raop_discover() -> bool:
+    """Load RAOP discovery if it is missing. Returns True if it had to.
+
+    Loaded via pactl, with defaults, on purpose. Loading it from a config file
+    was tried and rejected twice over: a config-file module cannot be unloaded
+    at runtime (`pactl unload-module` answers Access denied), and the file
+    carried a sess.latency.msec override that turned out to kill shairport-sync
+    receivers — sessions established, metadata flowed, no audio came out, and
+    eventually the sink vanished with "timestamp: expected ... != actual".
+
+    Called from rooms.list_rooms(), so discovery self-heals after a PipeWire
+    restart without anyone having to remember it.
+    """
+    if raop_discover_loaded():
+        return False
+    load_raop_discover()
+    return True
+
+
 # --------------------------------------------------------------------------
 # The hub
 # --------------------------------------------------------------------------

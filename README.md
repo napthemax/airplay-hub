@@ -83,17 +83,20 @@ you have and adapts.
 Running a mix, rooms can drift apart, because the two audio paths buffer
 differently. You hear it as an echo between rooms. Two settings fix it.
 
+**The HomePod rooms lag behind the others.** That is the normal case — a
+HomePod buffers more on its own than a Raspberry Pi does, and there is no way
+to read how much from the outside. Lower OwnTone's buffer until they meet:
+
+```bash
+./sync.sh owntone 1750
+```
+
+Listen, adjust in steps of ~250 ms, listen again. The value is saved.
+
 **One room is off on its own.** Press **i** on that room's row. There is a
-slider: play music in several rooms and drag while listening. If the room lags
-behind, drag left.
-
-**All the simple AirPlay rooms are off against the HomePod rooms.** Run
-`./sync.sh` to see where things stand, and `./sync.sh +100` or `./sync.sh -100`
-to shift them.
-
-A HomePod buffers more on its own than a Raspberry Pi does, and there is no way
-to read how much from the outside. So the last adjustment is made by ear — but
-only once, because the values are saved.
+slider that shifts just that room. It can only hold a room *back*; a room that
+lags cannot be pulled forward, and pushing the slider too far makes the audio
+clip. Keep the buffer above the slider value by at least 500 ms.
 
 ## Troubleshooting
 

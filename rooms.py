@@ -113,9 +113,25 @@ def forget_unreachable() -> None:
 
 
 def list_rooms() -> list[Room]:
+    # Discovery must be running or every AirPlay 1 room silently falls back to
+    # OwnTone — which holds the session and reports play, but shairport-sync
+    # receivers never produce sound from it. That was the very first mystery of
+    # this project, and it must not be able to come back quietly.
+    try:
+        pwhub.ensure_raop_discover()
+    except pwhub.PactlError:
+        pass
+
     ot = _owntone_outputs()
     pw = _pipewire_sinks()
     routes = pwhub.active_routes()
+
+    # Loopbacks whose sink died (a failed RAOP handshake takes the sink with
+    # it) linger invisibly and hold state. Clean them before deciding anything.
+    try:
+        pwhub.prune_orphan_routes({s.name for s in pwhub.list_sinks()}, routes)
+    except pwhub.PactlError:
+        pass
 
     found: list[Room] = []
     for key in sorted(set(ot) | set(pw)):
@@ -139,7 +155,8 @@ def list_rooms() -> list[Room]:
                 note=(
                     "Requires FairPlay pairing, which only OwnTone can do."
                     if fairplay
-                    else "Only visible through OwnTone right now."
+                    else "No PipeWire sink found — OwnTone fallback. NOTE: "
+                         "shairport-sync receivers stay silent on this path."
                 ),
             )
         else:
