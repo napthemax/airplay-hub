@@ -221,6 +221,27 @@ else
   yellow "  service did not start - see: journalctl --user -u airplay-hub-web -n 20"
 fi
 
+# A firewall will silently drop the phone's connection — the browser reports a
+# timeout, which looks like the server is down rather than blocked. Offer to
+# open the port for the local subnet only.
+subnet=$(ip -4 route 2>/dev/null | awk '/proto kernel/ && /src/ {print $1; exit}')
+if systemctl is-active --quiet ufw 2>/dev/null; then
+  if ! sudo ufw status 2>/dev/null | grep -q "8730"; then
+    echo
+    yellow "ufw is active and will block your phone from reaching the web interface."
+    read -rp "Open port 8730 for ${subnet:-your local network}? [Y/n] " answer
+    if [[ ! "$answer" =~ ^[nN]$ ]] && [ -n "$subnet" ]; then
+      sudo ufw allow from "$subnet" to any port 8730 proto tcp comment 'AirPlay Hub web'
+      echo "  opened for $subnet only — not reachable from the internet"
+    fi
+  fi
+elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  echo
+  yellow "firewalld is active. To let your phone reach the web interface:"
+  echo "  sudo firewall-cmd --permanent --add-port=8730/tcp --zone=home"
+  echo "  sudo firewall-cmd --reload"
+fi
+
 # So the machine does not have to be logged in for the phone to work.
 if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
   echo

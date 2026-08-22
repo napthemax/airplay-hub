@@ -401,6 +401,12 @@ menu entry, no terminal requirement, everything set up by a script.
   click rather than the source. Explicit links can prevent it, but that leaves
   four nodes and two loopbacks per room, and `rooms.py` would have to recognise
   the chain to see a room as on at all. Not worth half a second.
+- **A timeout from the phone is the firewall, not the server.** ufw drops
+  outside traffic silently, so the browser reports ERR_CONNECTION_TIMED_OUT
+  while the machine reaches its own address fine. "Connection refused" would
+  mean nothing is listening; a timeout means packets vanish. Note that
+  `ufw status` needs root — check `systemctl is-active ufw` instead, which is
+  what install.sh and diagnose.sh do.
 - **FairPlay cannot be worked around.** `et=0,3,5` in the TXT record means
   PipeWire can never reach the device. HomeKit pairing does not help; the
   pairing must be done by the sender, and OwnTone is the one that can.

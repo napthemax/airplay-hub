@@ -70,6 +70,15 @@ at the top controls all of them at once.
 the address. Same rooms, same buttons. Add it to your home screen and it
 behaves like an app.
 
+If the phone times out, a firewall is dropping it. The installer offers to open
+the port; to do it by hand:
+
+```bash
+sudo ufw allow from 192.168.1.0/24 to any port 8730 proto tcp
+```
+
+Use your own subnet — `./diagnose.sh` prints the exact command.
+
 The web interface only accepts connections from your own network. There is no
 login, and it should never be port-forwarded.
 
