@@ -61,10 +61,18 @@ show() {
   echo
   echo "  PipeWire rooms (Volumio, shairport-sync)"
   echo "    requested  sess.latency.msec = $(configured) ms"
-  if [ "$sink" != "?" ]; then
+  # The loopback only exists while a room is on. Counting it as zero would make
+  # the total look ~133 ms too low and the difference below plain wrong, so say
+  # the measurement is incomplete instead of quietly reporting a bad number.
+  if [ "$sink" != "?" ] && [ "$lb" -gt 0 ]; then
     total=$((sink + lb))
     echo "    actual     $sink ms in the sink + $lb ms in the loopback = $total ms"
+  elif [ "$sink" != "?" ]; then
+    total=""
+    echo "    actual     $sink ms in the sink, loopback not measurable"
+    echo "               (switch a PipeWire room on to see the real total)"
   else
+    total=""
     echo "    actual     (no room switched on - turn one on to measure)"
   fi
   echo
@@ -82,7 +90,7 @@ for o in [o for o in outs if o.get('offset_ms')]:
     v = o['offset_ms']
     print(f\"    {o['name']}: {v:+d} ms ({'later' if v > 0 else 'earlier'})\")
 " || true
-  if [ "$sink" != "?" ]; then
+  if [ -n "$total" ]; then
     echo
     echo "    difference: $((total - ot)) ms"
   fi
