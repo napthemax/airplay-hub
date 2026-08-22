@@ -98,6 +98,11 @@ slider that shifts just that room. It can only hold a room *back*; a room that
 lags cannot be pulled forward, and pushing the slider too far makes the audio
 clip. Keep the buffer above the slider value by at least 500 ms.
 
+**A known limit:** the slider stops at -2000 ms, and a HomePod can sit further
+behind than that. Rooms of the same kind stay in sync with each other, so the
+gap only appears where AirPlay 1 and AirPlay 2 rooms play together. If that
+bothers you, one kind of receiver throughout is the real answer.
+
 ## Troubleshooting
 
 ```bash

@@ -221,8 +221,15 @@ hardware, in this order:
 | `raop.latency.ms` on discover | Module reloads itself; argument does not stick |
 | `offset_ms` per OwnTone output | **Works**, but capped at ±2000 ms |
 
-So the per-room slider is the only working control, and it only reaches OwnTone
-rooms. `./sync.sh owntone <ms>` still exists for start behaviour, with a floor
+So the per-room slider is the only working control, it only reaches OwnTone
+rooms, and it stops at -2000 ms. On this hardware that leaves a HomePod roughly
+half a second behind the Volumio rooms, and there is no lever left to close it.
+Accepted as a known limitation 2026-08-22.
+
+Two Volumio rooms run in perfect sync with each other — verified with a ping
+tone — so the gap exists only at the seam between the engines. A house running
+one kind of receiver does not have this problem at all, which is the real fix
+if it ever becomes worth it. `./sync.sh owntone <ms>` still exists for start behaviour, with a floor
 of 500 ms, for two reasons. OwnTone refuses AirPlay 2 outright below its own
 minimum and says so in the log:
 
@@ -378,6 +385,22 @@ menu entry, no terminal requirement, everything set up by a script.
   engine rule in rooms.py (AirPlay 1 -> PipeWire) is a functional requirement,
   not a preference. list_rooms() self-heals discovery so the silent fallback
   cannot happen quietly.
+- **A filter-chain delay sink feeds back into the hub.** Inserting
+  `libpipewire-module-filter-chain` with a `delay` node between the hub and the
+  PipeWire rooms looked like the missing lever — it is the one latency control
+  that does not touch RAOP timing. It builds, it has a monitor, and it loops:
+  the filter's playback side is `passive`, so PipeWire happily links it back to
+  AirPlayHub. `pw-link -l` shows it plainly:
+
+  ```
+  AirPlayHubDelayed.sink:output_FL
+    |-> AirPlayHub:playback_FL
+  ```
+
+  Audio then circles at one lap per delay period — heard as a fast repeated
+  click rather than the source. Explicit links can prevent it, but that leaves
+  four nodes and two loopbacks per room, and `rooms.py` would have to recognise
+  the chain to see a room as on at all. Not worth half a second.
 - **FairPlay cannot be worked around.** `et=0,3,5` in the TXT record means
   PipeWire can never reach the device. HomeKit pairing does not help; the
   pairing must be done by the sender, and OwnTone is the one that can.
