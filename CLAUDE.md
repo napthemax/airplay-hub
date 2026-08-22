@@ -210,10 +210,33 @@ receiver, it does not move it the way the arithmetic in `sync.sh` assumes. Do
 not trust the "difference" figure for cross-engine work; it is a baseline, not a
 prediction.
 
-When the OwnTone room is the late one and its slider has bottomed out, the
-buffer to reduce is OwnTone's own: `./sync.sh owntone <ms>` sets
-`start_buffer_ms` in `/etc/owntone.conf` and restarts the service. Default is
-2250; the config file notes that 500 usually works.
+**Every latency lever except one turned out to be a dead end.** Tested on real
+hardware, in this order:
+
+| Lever | Result |
+|---|---|
+| `sess.latency.msec` on the RAOP sink | Silences shairport-sync entirely |
+| `latency_msec` on the loopback | Ignored — always lands at 1323/44100 |
+| `start_buffer_ms` in OwnTone | Start buffer only, not running latency |
+| `raop.latency.ms` on discover | Module reloads itself; argument does not stick |
+| `offset_ms` per OwnTone output | **Works**, but capped at ±2000 ms |
+
+So the per-room slider is the only working control, and it only reaches OwnTone
+rooms. `./sync.sh owntone <ms>` still exists for start behaviour, with a floor
+of 500 ms, for two reasons. OwnTone refuses AirPlay 2 outright below its own
+minimum and says so in the log:
+
+```
+airplay: Configuration of start_buffer_ms must be higher than min latency (250)
+airplay: Could not attach a master session for device 'HomePod Sovrum'
+```
+
+and even above that, a small buffer starves playback into stuttering, which
+reads as *worse* timing rather than earlier. If a HomePod suddenly answers
+HTTP 400 on select, check this value first.
+
+Do not go looking for a PipeWire-side latency knob again. There isn't one that
+both moves the audio and leaves the receiver playing.
 
 **But both ways of making a HomePod earlier draw on the same buffer**, so they
 fight each other. `start_buffer_ms = 1250` clipped on its own, and offset -2000

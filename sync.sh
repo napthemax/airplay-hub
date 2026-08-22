@@ -22,6 +22,10 @@
 
 set -euo pipefail
 
+# Below this OwnTone starves: playback stutters and starts unreliably. The
+# shipped config notes 500 ms as the practical floor, and 0 makes it unusable.
+MIN_BUFFER=500
+
 ot_ms() {
   local v
   v=$(grep -oP '^\s*start_buffer_ms\s*=\s*\K[0-9]+' /etc/owntone.conf 2>/dev/null | head -1)
@@ -46,8 +50,16 @@ for o in [o for o in outs if o.get('offset_ms')]:
     print(f\"    {o['name']}: slider {v:+d} ms ({'later' if v > 0 else 'earlier'})\")
 " || true
   echo
-  echo "  If the OwnTone rooms lag: ./sync.sh owntone $(( $(ot_ms) - 250 ))"
-  echo "  If they run ahead:        ./sync.sh owntone $(( $(ot_ms) + 250 ))"
+  local down up
+  down=$(( $(ot_ms) - 250 )); [ "$down" -lt "$MIN_BUFFER" ] && down=$MIN_BUFFER
+  up=$(( $(ot_ms) + 250 ))
+  echo "  Lower (earlier): ./sync.sh owntone $down"
+  echo "  Higher:          ./sync.sh owntone $up"
+  echo
+  echo "  Note: start_buffer_ms is what OwnTone buffers BEFORE starting, not"
+  echo "  running latency. It affects how playback begins more than where the"
+  echo "  room sits in time. For steady-state timing use the per-room slider"
+  echo "  in the app; it is the only lever that reliably moves an OwnTone room."
   echo
 }
 
@@ -61,6 +73,11 @@ if [ "$1" = "owntone" ]; then
   case "$want" in
     ''|*[!0-9]*) echo "Usage: ./sync.sh owntone <milliseconds>, e.g. 1750" >&2; exit 1 ;;
   esac
+  if [ "$want" -lt "$MIN_BUFFER" ]; then
+    echo "Refusing $want ms — below $MIN_BUFFER OwnTone starves and playback" >&2
+    echo "stutters. Pass $MIN_BUFFER or more." >&2
+    exit 1
+  fi
   echo "start_buffer_ms: $(ot_ms) -> $want"
   if grep -qE '^[[:space:]]*start_buffer_ms[[:space:]]*=' /etc/owntone.conf; then
     sudo sed -i "s/^\([[:space:]]*\)start_buffer_ms[[:space:]]*=.*/\1start_buffer_ms = $want/" /etc/owntone.conf
