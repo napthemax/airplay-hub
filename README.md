@@ -84,33 +84,49 @@ login, and it should never be port-forwarded.
 
 ## If the rooms are out of sync
 
-**This section only applies if you own both AirPlay 1 and AirPlay 2 speakers.**
-With only one kind, every room takes the same path, shares the same buffer and
-stays in sync by itself — the control is not even shown. The app detects what
-you have and adapts.
+**This only applies if you own both AirPlay 1 and AirPlay 2 speakers.** With
+only one kind, every room takes the same path, shares the same buffer and stays
+in step by itself. The app detects that and keeps the timing controls hidden.
 
-Running a mix, rooms can drift apart, because the two audio paths buffer
-differently. You hear it as an echo between rooms. Two settings fix it.
+A mix can drift, because the two audio paths buffer differently. You hear it as
+an echo between rooms. The window then shows **Hold back the faster path**
+under the room list (delay AirPlay 1 at the hub) and **Match timing…** next to
+the rooms (leftover per-room trim). The phone page gets both. That is the
+place to start — not a PipeWire latency setting.
 
-**The HomePod rooms lag behind the others.** That is the normal case — a
-HomePod buffers more on its own than a Raspberry Pi does, and there is no way
-to read how much from the outside. Lower OwnTone's buffer until they meet:
+**Delay rooms that are ahead.** Open **i** on an AirPlay 2 room that you hear
+first and drag the slider toward **later**, then release. OwnTone only applies
+the offset the next time it builds a session, so the change lands after a short
+gap in that room. The slider is remembered by room name if OwnTone is restarted.
+
+**Do not pull a lagging HomePod earlier until it goes silent.** Negative offset
+eats OwnTone's start buffer. Around −1850 ms the audio clips; at −2000 ms it
+can stop. Delay the rooms that are ahead instead.
+
+**Keep headroom.** The slider and the start buffer share the same store of
+audio. Stay around
+
+`start_buffer_ms − |offset| ≥ 500 ms`
+
+An offset of −2000 ms therefore wants a buffer around 2500 ms. The guide shows
+the current buffer (read from `/etc/owntone.conf`) and the command to change
+it. Changing it still needs your password — the app does not run sudo:
 
 ```bash
-./sync.sh owntone 1750
+./sync.sh owntone 2500
 ```
 
-Listen, adjust in steps of ~250 ms, listen again. The value is saved.
+That restarts OwnTone; switch the AirPlay 2 rooms on again afterwards. Listen,
+adjust in steps of ~250 ms if the start of playback stutters.
 
-**One room is off on its own.** Press **i** on that room's row. There is a
-slider that shifts just that room. It can only hold a room *back*; a room that
-lags cannot be pulled forward, and pushing the slider too far makes the audio
-clip. Keep the buffer above the slider value by at least 500 ms.
+**Clicks.** The guide can play six clicks through the hub. Walk the rooms and
+note which one you hear first — that one is ahead.
 
-**A known limit:** the slider stops at -2000 ms, and a HomePod can sit further
+**A known limit:** the slider stops at ±2000 ms, and a HomePod can sit further
 behind than that. Rooms of the same kind stay in sync with each other, so the
-gap only appears where AirPlay 1 and AirPlay 2 rooms play together. If that
-bothers you, one kind of receiver throughout is the real answer.
+gap only appears where AirPlay 1 and AirPlay 2 play together. If that bothers
+you, one kind of receiver throughout is the real answer. Do not override
+PipeWire's RAOP latency to close it — that silences shairport-sync.
 
 ## Delay the faster path (mixed AirPlay 1 + 2)
 

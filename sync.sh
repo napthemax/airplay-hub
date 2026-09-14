@@ -4,7 +4,10 @@
 #   ./sync.sh              show how things stand
 #   ./sync.sh owntone 1750 set OwnTone's start_buffer_ms (needs sudo)
 #
-# How the levers work — hard-earned knowledge, do not relearn it the loud way:
+# The window also has a "Match timing" guide when both engines are in use;
+# this script is what that guide points at for the buffer (the app does not
+# run sudo). How the levers work — hard-earned knowledge, do not relearn it
+# the loud way:
 #
 #   * AirPlay 1 rooms (shairport-sync/Volumio) run over PipeWire at DEFAULT
 #     latency. Overriding sess.latency.msec was tried: sessions came up,

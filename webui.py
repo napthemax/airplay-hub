@@ -129,7 +129,24 @@ PAGE = """<!doctype html>
     background: #2b3d4f; color: #dbe6f0; border: 0; border-radius: 8px;
   }
   .hubdelay .now { color: #dbe6f0; font-size: 13px; }
-
+  .sync {
+    display: none; margin: 0 18px 14px; padding: 12px 14px;
+    background: #22303f; border-radius: 12px;
+  }
+  .sync h2 { margin: 0 0 6px; font-size: 15px; }
+  .sync p, .sync li { color: #8fa3b8; font-size: 13px; margin: 0 0 8px; }
+  .sync ol { margin: 0 0 8px; padding-left: 18px; }
+  .sync .cmd {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #dbe6f0; word-break: break-all; margin: 8px 0;
+  }
+  .sync .warn { color: #e0a33a; }
+  .sync button, .timing-row button {
+    background: #2b3d4f; color: #dbe6f0; border: 0; border-radius: 8px;
+    padding: 8px 12px; font-size: 13px;
+  }
+  .timing-row { margin-top: 4px; }
+  .timing-row label { color: #6f8299; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -141,6 +158,18 @@ PAGE = """<!doctype html>
 <div class="master">
   <label>ALL ROOMS</label>
   <input type="range" id="master" min="0" max="100" value="100">
+</div>
+<div id="sync" class="sync">
+  <h2>Match timing</h2>
+  <p id="sync-when"></p>
+  <p id="sync-when-not"></p>
+  <ol id="sync-steps"></ol>
+  <p id="sync-buffer"></p>
+  <p id="sync-now"></p>
+  <div class="cmd" id="sync-cmd"></div>
+  <p>Run that in a terminal on the machine (it asks for your password). The app does not edit OwnTone's config itself.</p>
+  <p id="sync-avoid"></p>
+  <button id="sync-clicks" type="button">Play six clicks</button>
 </div>
 <div class="section">ROOMS</div>
 <ul id="rooms"></ul>
@@ -178,6 +207,12 @@ async function api(path, body) {
 // is hanging.
 const rows = new Map();
 
+function timingCaption(value) {
+  const n = +value;
+  if (n === 0) return "timing · in step";
+  return "timing · " + (n > 0 ? "+" + n + " ms later" : n + " ms earlier");
+}
+
 function makeRow(room) {
   const li = document.createElement("li");
 
@@ -213,13 +248,37 @@ function makeRow(room) {
   tag.className = "tag";
   tag.textContent = "not answering";
   body.appendChild(tag);
+
+  const timing = document.createElement("div");
+  timing.className = "timing-row";
+  timing.style.display = "none";
+  const timingLabel = document.createElement("label");
+  const timingSlider = document.createElement("input");
+  timingSlider.type = "range";
+  timingSlider.min = -2000; timingSlider.max = 2000; timingSlider.step = 25;
+  timingSlider.oninput = () => {
+    dragging = true;
+    timingLabel.textContent = timingCaption(timingSlider.value);
+  };
+  timingSlider.onchange = async () => {
+    dragging = false;
+    try {
+      render(await api(`/api/rooms/${encodeURIComponent(room.key)}/offset`, {
+        offset_ms: +timingSlider.value
+      }));
+    } catch (e) { lost(); }
+  };
+  timing.appendChild(timingLabel);
+  timing.appendChild(timingSlider);
+  body.appendChild(timing);
+
   li.appendChild(body);
 
   const pct = document.createElement("div");
   pct.className = "pct";
   li.appendChild(pct);
 
-  return {li, btn, name, slider, tag, pct, data: room};
+  return {li, btn, name, slider, tag, pct, timing, timingLabel, timingSlider, data: room};
 }
 
 function updateRow(row, room) {
@@ -233,6 +292,18 @@ function updateRow(row, room) {
   row.pct.textContent = room.reachable ? room.volume + "%" : "";
   if (!dragging && document.activeElement !== row.slider) {
     row.slider.value = room.volume;
+  }
+  const showTiming = !!(room.can_offset && room.reachable);
+  row.timing.style.display = showTiming ? "" : "none";
+  if (showTiming) {
+    row.timingSlider.min = room.offset_min || -2000;
+    row.timingSlider.max = room.offset_max || 2000;
+    if (!dragging && document.activeElement !== row.timingSlider) {
+      row.timingSlider.value = room.offset_ms || 0;
+    }
+    let caption = timingCaption(row.timingSlider.value);
+    if (room.risky) caption += " · little headroom";
+    row.timingLabel.textContent = caption;
   }
 }
 
@@ -288,6 +359,32 @@ function render(data) {
     else if (delay.stored_ms) now.textContent = delay.stored_ms + " ms stored";
     else now.textContent = "no extra delay";
   }
+  renderSync(data);
+}
+
+function renderSync(data) {
+  const box = document.getElementById("sync");
+  if (!data.mixed || !data.guide) {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "block";
+  const g = data.guide;
+  document.getElementById("sync-when").textContent = g.when;
+  document.getElementById("sync-when-not").textContent = g.when_not;
+  const ol = document.getElementById("sync-steps");
+  ol.innerHTML = "";
+  (g.steps || []).forEach(step => {
+    const li = document.createElement("li");
+    li.textContent = step;
+    ol.appendChild(li);
+  });
+  document.getElementById("sync-buffer").textContent = g.buffer;
+  const now = document.getElementById("sync-now");
+  now.textContent = "Start buffer now: " + data.buffer_ms + " ms. Suggested: " + data.suggested_buffer_ms + " ms.";
+  now.className = data.suggested_buffer_ms > data.buffer_ms ? "warn" : "";
+  document.getElementById("sync-cmd").textContent = data.buffer_command;
+  document.getElementById("sync-avoid").textContent = g.avoid;
 }
 
 function lost() {
@@ -312,6 +409,16 @@ async function commitDelay() {
 }
 document.getElementById("hubdelay-ms").onchange = commitDelay;
 document.getElementById("hubdelay-path").onchange = commitDelay;
+
+document.getElementById("sync-clicks").onclick = async () => {
+  const btn = document.getElementById("sync-clicks");
+  btn.disabled = true;
+  btn.textContent = "Playing clicks…";
+  try { render(await api("/api/sync/clicks", {})); }
+  catch (e) { lost(); }
+  btn.disabled = false;
+  btn.textContent = "Play six clicks";
+};
 
 async function tick() {
   if (!dragging && !draggingDelay) {
@@ -368,6 +475,7 @@ class Handler(BaseHTTPRequestHandler):
             current = rooms.list_rooms()
         except pwhub.PactlError:
             current = []
+        overview = rooms.sync_overview(current)
         warning = ""
         if rooms.any_owntone_on(current):
             if not bridge.is_running():
@@ -378,10 +486,17 @@ class Handler(BaseHTTPRequestHandler):
             )
         except pwhub.PactlError:
             master = 100
+        by_key = {item["key"]: item for item in overview["rooms"]}
         return {
             "master": master,
             "warning": warning,
             "hubdelay": rooms.hub_delay_status(current),
+            "mixed": overview["mixed"],
+            "buffer_ms": overview["buffer_ms"],
+            "suggested_buffer_ms": overview["suggested_buffer_ms"],
+            "buffer_command": overview["buffer_command"],
+            "headroom_ms": overview["headroom_ms"],
+            "guide": overview["guide"] if overview["mixed"] else None,
             "rooms": [
                 {
                     "key": r.key,
@@ -390,6 +505,12 @@ class Handler(BaseHTTPRequestHandler):
                     "volume": r.volume,
                     "reachable": r.reachable,
                     "engine": r.engine,
+                    "offset_ms": r.offset_ms,
+                    "can_offset": bool(by_key.get(r.key, {}).get("can_offset")),
+                    "risky": bool(by_key.get(r.key, {}).get("risky")),
+                    "headroom_ms": by_key.get(r.key, {}).get("headroom_ms"),
+                    "offset_min": overview["offset_min"],
+                    "offset_max": overview["offset_max"],
                 }
                 for r in current
             ],
@@ -428,8 +549,17 @@ class Handler(BaseHTTPRequestHandler):
                     int(body.get("delay_ms", 0)),
                     body.get("path"),
                 )
-            except Exception as exc:
-                self._send(500, {"error": str(exc)})
+            except Exception as extra:
+                self._send(500, {"error": str(extra)})
+                return
+            self._send(200, self._state())
+            return
+
+        if path == "/api/sync/clicks":
+            try:
+                rooms.play_sync_clicks()
+            except (rooms.SyncToneError, pwhub.PactlError) as extra:
+                self._send(500, {"error": str(extra)})
                 return
             self._send(200, self._state())
             return
@@ -456,6 +586,8 @@ class Handler(BaseHTTPRequestHandler):
                 rooms.sync_stream()
             elif action == "volume":
                 rooms.set_volume(room, int(body.get("volume", 0)))
+            elif action == "offset":
+                rooms.set_offset(room, int(body.get("offset_ms", 0)))
             else:
                 self._send(404, {"error": "unknown action"})
                 return

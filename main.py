@@ -17,7 +17,7 @@ import sys
 from functools import partial
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QProcess
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -73,6 +73,13 @@ QComboBox {
 QFrame#room { background-color: transparent; border-radius: 8px; }
 QFrame#room:hover { background-color: #22303f; }
 QFrame#syncbox { background-color: #22303f; border-radius: 8px; }
+QLabel#warning { color: #e0a33a; font-size: 11px; }
+QLabel#oknote { color: #7f95ab; font-size: 11px; }
+QPushButton#sync {
+    background-color: #2b3d4f; color: #dbe6f0; font-size: 12px;
+    border: none; border-radius: 6px; padding: 5px 10px;
+}
+QPushButton#sync:hover { background-color: #365068; }
 
 /* Rooms that do not answer: still listed, but clearly out of reach. */
 QLabel#roomgone { font-size: 15px; color: #55697d; }
@@ -138,6 +145,7 @@ class InfoDialog(QDialog):
         self.room = room
         self.show_timing = show_timing
         self.window_ref = window
+        self._committed = room.offset_ms
         self.setWindowTitle(room.name)
         self.setMinimumWidth(430)
         layout = QVBoxLayout(self)
@@ -163,24 +171,54 @@ class InfoDialog(QDialog):
             grid.addWidget(val, row, 1)
         layout.addLayout(grid)
 
-        # The control only belongs in houses running both engines. See
-        # rooms.mixed_engines().
-        if room.can_offset and self.show_timing:
-            layout.addWidget(self._sync_section())
+        # Timing controls belong in houses running both engines. See
+        # rooms.mixed_engines(). Same-kind rooms stay in step on their own.
+        if self.show_timing:
+            if room.can_offset:
+                layout.addWidget(self._sync_section())
+            else:
+                layout.addWidget(self._pipewire_note())
 
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         row = QHBoxLayout()
+        if self.show_timing:
+            guide = QPushButton("Timing guide")
+            guide.setObjectName("sync")
+            guide.clicked.connect(self._open_guide)
+            row.addWidget(guide)
         row.addStretch(1)
         row.addWidget(close)
         layout.addLayout(row)
 
-    def _sync_section(self) -> QWidget:
-        """The control that shifts the room in time.
+    def _open_guide(self) -> None:
+        SyncGuideDialog(self.window_ref, self).exec()
 
-        The two engines can be matched on paper, but AirPlay devices buffer
-        differing amounts on their own and that is invisible from here. The last
-        step has to be done by ear, while the music plays.
+    def _pipewire_note(self) -> QWidget:
+        box = QFrame()
+        box.setObjectName("syncbox")
+        col = QVBoxLayout(box)
+        col.setContentsMargins(13, 11, 13, 12)
+        note = QLabel(
+            "This room stays in step with the other AirPlay 1 rooms. There is "
+            "no safe per-room delay on this path — it would silence the "
+            "speaker. Hold the whole AirPlay 1 feed back with the hub delay "
+            "under the room list. If an AirPlay 2 room is ahead of this one, "
+            "delay that room from its own info button. If a HomePod lags, "
+            "use the hub delay first, then the timing guide — not a PipeWire "
+            "latency knob."
+        )
+        note.setObjectName("oknote")
+        note.setWordWrap(True)
+        col.addWidget(note)
+        return box
+
+    def _sync_section(self) -> QWidget:
+        """The control that shifts an AirPlay 2 room in time.
+
+        OwnTone reads offset_ms once, when the session is built. The slider
+        therefore commits on release (and on keyboard changes), not while
+        dragging. Positive = later. Negative eats the start buffer.
         """
         box = QFrame()
         box.setObjectName("syncbox")
@@ -188,78 +226,273 @@ class InfoDialog(QDialog):
         col.setContentsMargins(13, 11, 13, 12)
         col.setSpacing(7)
 
-        rubrik = QLabel("Timing against the other rooms")
-        rubrik.setStyleSheet("color: #dbe6f0; font-size: 13px; font-weight: bold;")
-        col.addWidget(rubrik)
+        heading = QLabel("Delay this room if it is ahead")
+        heading.setStyleSheet("color: #dbe6f0; font-size: 13px; font-weight: bold;")
+        col.addWidget(heading)
 
-        hjalp = QLabel(
-            "Play music in several rooms and drag while listening.\n"
-            "Only works for a room that is AHEAD of the others — drag right to "
-            "hold it back. A room that lags behind cannot be pulled forward; "
-            "there is no earlier audio to play. Delay the other rooms with "
-            "./sync.sh instead."
+        help_text = QLabel(
+            "Play in several rooms, then drag toward later and release. "
+            "A room that lags cannot be pulled forward — there is no earlier "
+            "audio in the pipe, and pushing left far enough clips, then "
+            "stops. Delay the rooms that are ahead instead."
         )
-        hjalp.setStyleSheet("color: #6f8299; font-size: 11px;")
-        hjalp.setWordWrap(True)
-        col.addWidget(hjalp)
+        help_text.setStyleSheet("color: #6f8299; font-size: 11px;")
+        help_text.setWordWrap(True)
+        col.addWidget(help_text)
 
-        rad = QHBoxLayout()
-        rad.setSpacing(9)
-        tidigare = QLabel("earlier\n(limited)")
-        tidigare.setStyleSheet("color: #55697d; font-size: 10px;")
-        tidigare.setToolTip(
-            "Limited by the buffer. Push too far and the audio clips, then stops."
+        row = QHBoxLayout()
+        row.setSpacing(9)
+        earlier = QLabel("earlier\n(limited)")
+        earlier.setStyleSheet("color: #55697d; font-size: 10px;")
+        earlier.setToolTip(
+            "Limited by OwnTone's start buffer. Push too far and the audio "
+            "clips, then stops. Raise the buffer with ./sync.sh owntone N "
+            "if you truly need more headroom."
         )
-        rad.addWidget(tidigare)
+        row.addWidget(earlier)
 
         self.offset = QSlider(Qt.Orientation.Horizontal)
-        self.offset.setRange(owntone.OFFSET_MIN, owntone.OFFSET_MAX)
+        self.offset.setRange(rooms.OFFSET_MIN, rooms.OFFSET_MAX)
         self.offset.setSingleStep(25)
         self.offset.setPageStep(100)
         self.offset.setValue(self.room.offset_ms)
         self.offset.valueChanged.connect(self._on_offset_preview)
         self.offset.sliderReleased.connect(self._on_offset_commit)
-        rad.addWidget(self.offset, 1)
+        row.addWidget(self.offset, 1)
 
-        senare = QLabel("later")
-        senare.setStyleSheet("color: #55697d; font-size: 10px;")
-        rad.addWidget(senare)
-        col.addLayout(rad)
+        later = QLabel("later")
+        later.setStyleSheet("color: #55697d; font-size: 10px;")
+        row.addWidget(later)
+        col.addLayout(row)
 
-        botten = QHBoxLayout()
+        bottom = QHBoxLayout()
         self.offset_label = QLabel()
         self.offset_label.setStyleSheet("color: #dbe6f0; font-size: 12px;")
-        botten.addWidget(self.offset_label)
-        botten.addStretch(1)
-        nolla = QPushButton("Reset")
-        nolla.clicked.connect(self._on_offset_reset)
-        botten.addWidget(nolla)
-        col.addLayout(botten)
+        bottom.addWidget(self.offset_label)
+        bottom.addStretch(1)
+        reset = QPushButton("Reset")
+        reset.clicked.connect(self._on_offset_reset)
+        bottom.addWidget(reset)
+        col.addLayout(bottom)
 
-        self._visa_offset(self.room.offset_ms)
+        self.headroom = QLabel()
+        self.headroom.setWordWrap(True)
+        col.addWidget(self.headroom)
+
+        self._show_offset(self.room.offset_ms)
         return box
 
-    def _visa_offset(self, value: int) -> None:
+    def _show_offset(self, value: int) -> None:
+        buffer_ms = rooms.start_buffer_ms()
+        headroom = rooms.offset_headroom(value, buffer_ms)
         if value == 0:
-            self.offset_label.setText("in step with the others")
+            self.offset_label.setText("in step with the other AirPlay 2 rooms")
         else:
             direction = "later" if value > 0 else "earlier"
             self.offset_label.setText(f"{value:+d} ms — {direction}")
 
+        if rooms.offset_risky(value, buffer_ms):
+            self.headroom.setObjectName("warning")
+            if value <= rooms.CLIP_WARN_MS:
+                self.headroom.setText(
+                    f"This far earlier will clip or go silent. Drag toward "
+                    f"later. Buffer is {buffer_ms} ms; keep about "
+                    f"{rooms.HEADROOM_MS} ms of headroom "
+                    f"(start_buffer_ms − |offset|)."
+                )
+            else:
+                need = abs(value) + rooms.HEADROOM_MS
+                self.headroom.setText(
+                    f"Headroom {headroom} ms — below ~{rooms.HEADROOM_MS} ms "
+                    f"the audio clips. Raise the buffer to at least {need} ms "
+                    f"({rooms.buffer_command(need)}) or drag toward later."
+                )
+        else:
+            self.headroom.setObjectName("oknote")
+            self.headroom.setText(
+                f"OwnTone start buffer {buffer_ms} ms · "
+                f"{headroom} ms headroom left (want ≥ {rooms.HEADROOM_MS} ms)."
+            )
+        self.headroom.style().unpolish(self.headroom)
+        self.headroom.style().polish(self.headroom)
+
     def _on_offset_preview(self, value: int) -> None:
-        self._visa_offset(value)
+        self._show_offset(value)
+        # Keyboard and Reset change the value without a mouse release.
+        if not self.offset.isSliderDown() and value != self._committed:
+            self._on_offset_commit()
 
     def _on_offset_commit(self) -> None:
         value = self.offset.value()
+        if value == self._committed:
+            return
         try:
             rooms.set_offset(self.room, value)
+            self._committed = value
             self.window_ref.log(f"{self.room.name}: timing {value:+d} ms")
         except (owntone.OwnToneError, ValueError) as exc:
             self.window_ref.log(f"Timing change failed: {exc}")
 
     def _on_offset_reset(self) -> None:
         self.offset.setValue(0)
-        self._on_offset_commit()
+
+
+class SyncGuideDialog(QDialog):
+    """When mixed engines can drift, and how to trim without clipping."""
+
+    def __init__(self, window: "MainWindow", parent: QWidget | None = None):
+        super().__init__(parent)
+        self.window_ref = window
+        self._proc: QProcess | None = None
+        self._wav: Path | None = None
+        self.setWindowTitle("Match timing")
+        self.setMinimumWidth(480)
+        self.setMinimumHeight(460)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 14)
+        root.setSpacing(10)
+
+        title = QLabel("Match timing")
+        title.setObjectName("header")
+        root.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        self.body = QVBoxLayout(inner)
+        self.body.setContentsMargins(0, 0, 8, 0)
+        self.body.setSpacing(10)
+        self._fill()
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
+
+        buttons = QHBoxLayout()
+        self.btn_clicks = QPushButton("Play six clicks")
+        self.btn_clicks.setToolTip(
+            "A click each second through the hub. Walk the rooms and note "
+            "which one you hear first — that one is ahead."
+        )
+        self.btn_clicks.clicked.connect(self._play_clicks)
+        buttons.addWidget(self.btn_clicks)
+        buttons.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        buttons.addWidget(close)
+        root.addLayout(buttons)
+
+    def _label(self, text: str, kind: str = "body") -> QLabel:
+        widget = QLabel(text)
+        widget.setWordWrap(True)
+        if kind == "heading":
+            widget.setStyleSheet("color: #dbe6f0; font-size: 13px; font-weight: bold;")
+        elif kind == "warn":
+            widget.setObjectName("warning")
+        else:
+            widget.setStyleSheet("color: #8fa3b8; font-size: 12px;")
+        return widget
+
+    def _fill(self) -> None:
+        overview = rooms.sync_overview(list(self.window_ref.rooms.values()))
+        guide = overview["guide"]
+
+        self.body.addWidget(self._label(str(guide["when_title"]), "heading"))
+        self.body.addWidget(self._label(str(guide["when"])))
+        self.body.addWidget(self._label(str(guide["when_not"])))
+
+        self.body.addWidget(self._label(str(guide["steps_title"]), "heading"))
+        for i, step in enumerate(guide["steps"], 1):
+            self.body.addWidget(self._label(f"{i}. {step}"))
+
+        self.body.addWidget(self._label(str(guide["buffer_title"]), "heading"))
+        self.body.addWidget(self._label(str(guide["buffer"])))
+
+        buffer_box = QFrame()
+        buffer_box.setObjectName("syncbox")
+        box = QVBoxLayout(buffer_box)
+        box.setContentsMargins(13, 11, 13, 12)
+        box.setSpacing(6)
+        current = (
+            f"Start buffer now: {overview['buffer_ms']} ms. "
+            f"Suggested for your sliders: {overview['suggested_buffer_ms']} ms."
+        )
+        if overview["suggested_buffer_ms"] > overview["buffer_ms"]:
+            box.addWidget(self._label(current, "warn"))
+        else:
+            box.addWidget(self._label(current))
+        cmd = str(overview["buffer_command"])
+        cmd_row = QHBoxLayout()
+        cmd_label = QLabel(cmd)
+        cmd_label.setStyleSheet(
+            "color: #dbe6f0; font-size: 11px; font-family: monospace;"
+        )
+        cmd_label.setWordWrap(True)
+        cmd_row.addWidget(cmd_label, 1)
+        copy = QPushButton("Copy")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(cmd))
+        cmd_row.addWidget(copy)
+        box.addLayout(cmd_row)
+        box.addWidget(self._label(
+            "That command asks for your password, edits /etc/owntone.conf and "
+            "restarts OwnTone. AirPlay 2 rooms then need switching on again. "
+            "The app does not run sudo itself."
+        ))
+        self.body.addWidget(buffer_box)
+
+        trims = [
+            item for item in overview["rooms"]
+            if item.get("can_offset") or item["engine"] == "owntone"
+        ]
+        if trims:
+            self.body.addWidget(self._label("AirPlay 2 rooms right now", "heading"))
+            for item in trims:
+                offset = item["offset_ms"]
+                extra = "in step" if offset == 0 else f"{offset:+d} ms"
+                if item.get("risky"):
+                    extra += " — little headroom, risk of clipping"
+                self.body.addWidget(self._label(f"{item['name']}: {extra}"))
+
+        self.body.addWidget(self._label("What not to do", "heading"))
+        self.body.addWidget(self._label(str(guide["avoid"])))
+        self.body.addStretch(1)
+
+    def _play_clicks(self) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.ProcessState.NotRunning:
+            return
+        try:
+            rooms.ensure_hub()
+            self._wav = rooms.write_click_wav()
+            cmd = rooms.hub_player_command(self._wav)
+        except (rooms.SyncToneError, PactlError) as exc:
+            self.window_ref.log(str(exc))
+            return
+        self.btn_clicks.setEnabled(False)
+        self.btn_clicks.setText("Playing clicks…")
+        self._proc = QProcess(self)
+        self._proc.finished.connect(self._clicks_finished)
+        self._proc.errorOccurred.connect(self._clicks_failed)
+        self._proc.start(cmd[0], cmd[1:])
+
+    def _clicks_finished(self, *args) -> None:
+        self._cleanup_wav()
+        self.btn_clicks.setEnabled(True)
+        self.btn_clicks.setText("Play six clicks")
+        self.window_ref.log("Played clicks through the hub.")
+
+    def _clicks_failed(self, *args) -> None:
+        self._cleanup_wav()
+        self.btn_clicks.setEnabled(True)
+        self.btn_clicks.setText("Play six clicks")
+        self.window_ref.log("Could not play the click track.")
+
+    def _cleanup_wav(self) -> None:
+        if self._wav is not None:
+            try:
+                self._wav.unlink()
+            except OSError:
+                pass
+            self._wav = None
 
 
 class RoomRow(QFrame):
@@ -536,9 +769,20 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.btn_move)
         root.addLayout(buttons)
 
+        section_row = QHBoxLayout()
         section = QLabel("ROOMS")
         section.setObjectName("section")
-        root.addWidget(section)
+        section_row.addWidget(section)
+        section_row.addStretch(1)
+        self.btn_sync = QPushButton("Match timing…")
+        self.btn_sync.setObjectName("sync")
+        self.btn_sync.setToolTip(
+            "AirPlay 1 and AirPlay 2 rooms can drift. Open a short guide."
+        )
+        self.btn_sync.clicked.connect(self.on_sync_guide)
+        self.btn_sync.hide()
+        section_row.addWidget(self.btn_sync)
+        root.addLayout(section_row)
 
         self.room_host = QWidget()
         self.room_layout = QVBoxLayout(self.room_host)
@@ -624,6 +868,8 @@ class MainWindow(QMainWindow):
                 except owntone.OwnToneError:
                     pass
         self.status.setText(text)
+        mixed = rooms.mixed_engines(found)
+        self.btn_sync.setVisible(mixed)
 
     def sync_stream(self, found: list[rooms.Room]) -> None:
         for rad in rooms.sync_stream(found):
@@ -673,6 +919,9 @@ class MainWindow(QMainWindow):
             InfoDialog(
                 room, self, self, show_timing=rooms.mixed_engines(list(self.rooms.values()))
             ).exec()
+
+    def on_sync_guide(self) -> None:
+        SyncGuideDialog(self, self).exec()
 
     def on_room_pair(self, room: rooms.Room) -> None:
         pin, ok = QInputDialog.getText(

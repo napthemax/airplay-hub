@@ -14,13 +14,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 BASE = "http://localhost:3689"
 TIMEOUT = 2.5
+CONF_PATH = Path("/etc/owntone.conf")
 
 # OwnTone's own limit. Outside it the API returns an error.
 OFFSET_MIN = -2000
 OFFSET_MAX = 2000
+
+# Shipped OwnTone default when start_buffer_ms is commented out.
+DEFAULT_START_BUFFER_MS = 2250
+# Below this, AirPlay 2 sessions fail or starve. Same floor as ./sync.sh.
+MIN_START_BUFFER_MS = 500
 
 
 class OwnToneError(RuntimeError):
@@ -99,6 +106,33 @@ def select(output_id: str, on: bool) -> None:
 
 def set_volume(output_id: str, volume: int) -> None:
     _request("PUT", f"/api/outputs/{output_id}", {"volume": max(0, min(100, volume))})
+
+
+def start_buffer_ms(conf: Path | None = None) -> int:
+    """Read start_buffer_ms from OwnTone's config. No sudo — display only.
+
+    Changing the value still goes through ./sync.sh (it edits /etc/owntone.conf
+    and restarts the service). The app only *shows* the number so the slider
+    and the buffer can be reasoned about together.
+    """
+    path = conf or CONF_PATH
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return DEFAULT_START_BUFFER_MS
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not line.lower().startswith("start_buffer_ms"):
+            continue
+        _, _, rest = line.partition("=")
+        token = rest.strip().split()[0] if rest.strip() else ""
+        try:
+            return max(0, int(token))
+        except ValueError:
+            break
+    return DEFAULT_START_BUFFER_MS
 
 
 def set_offset(output_id: str, offset_ms: int) -> None:
