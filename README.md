@@ -204,12 +204,22 @@ you never have to choose.
 | `owntone.py` | The OwnTone side |
 | `bridge.py` | Feeds OwnTone with the machine's audio |
 | `hubdelay.py` | Delay-to-slowest: PCM delay on the faster hub feed |
+| `VERSION` | Installed build number (semver, no `v`) |
+| `version.py` | Reads `VERSION` and the short git commit |
 | `install.sh` | Install and uninstall |
 | `setup-owntone.sh` | Makes OwnTone ready to run |
 | `sync.sh` | Shows and adjusts timing between rooms |
 | `diagnose.sh` | Environment check when nothing plays |
 | `probe-raop.sh` | Shows what each speaker on the network supports |
 | `debug-owntone.sh` | Turns on verbose logging in OwnTone |
+
+## Versioning
+
+The number in `VERSION` is what is installed. `./install.sh` prints it with
+the short git commit, and so do `airplay-hub --version` and the phone page.
+
+For a new release: bump `VERSION`, commit, merge, then tag it
+(`git tag v0.2.0` and `git push origin v0.2.0`). GitHub Releases can wait.
 
 ## License
 

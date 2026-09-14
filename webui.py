@@ -4,6 +4,7 @@ Web interface for the phone — same rooms, same buttons, in your pocket.
 
     python webui.py            run in the foreground, stop with Ctrl-C
     python webui.py --port 80  a different port
+    python webui.py --version  installed build (VERSION + short git SHA)
 
 The server listens on every interface but **only admits clients from private
 networks** (10/8, 172.16/12, 192.168/16, link-local and localhost). It is meant
@@ -27,6 +28,7 @@ from urllib.parse import unquote, urlparse
 import bridge
 import pwhub
 import rooms
+from version import argparse_version, display as build_id
 
 PORT = 8730
 
@@ -72,6 +74,7 @@ PAGE = """<!doctype html>
   }
   header { padding: 18px 18px 10px; }
   h1 { margin: 0; font-size: 22px; }
+  #build { color: #55697d; font-size: 11px; margin-top: 4px; }
   #status { color: #8fa3b8; font-size: 13px; margin-top: 4px; }
   .master {
     margin: 6px 18px 14px; padding: 12px 14px;
@@ -152,6 +155,7 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>AirPlay Hub</h1>
+  <div id="build">__BUILD__</div>
   <div id="status">Loading…</div>
 </header>
 <div id="offline">No contact with the server. Is the machine awake?</div>
@@ -522,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
-            self._send(200, html=PAGE)
+            self._send(200, html=PAGE.replace("__BUILD__", build_id()))
         elif path == "/api/rooms":
             self._send(200, self._state())
         else:
@@ -603,13 +607,14 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     p = argparse.ArgumentParser(description="Web interface for AirPlay Hub")
     p.add_argument("--port", type=int, default=PORT)
+    p.add_argument("--version", action="version", version=argparse_version())
     args = p.parse_args()
 
     server = ThreadingHTTPServer(("", args.port), Handler)
     server.daemon_threads = True
     # flush, or the lines sit in the buffer when the server runs as a systemd
     # service and the journal looks empty until the process dies.
-    print("AirPlay Hub — web interface", flush=True)
+    print(f"AirPlay Hub — web interface {build_id()}", flush=True)
     for address in local_addresses():
         print(f"  http://{address}:{args.port}", flush=True)
     print("Home network clients only. Stop with Ctrl-C.", flush=True)

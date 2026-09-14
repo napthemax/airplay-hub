@@ -3,6 +3,7 @@
 AirPlay Hub — the same audio in several rooms, on Linux.
 
 Run:  python main.py
+       python main.py --version
 Trouble:  ./diagnose.sh
 
 The window shows rooms, not plumbing. That the kitchen stereo is reached over
@@ -13,9 +14,19 @@ peeks out from behind the info button.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from functools import partial
 from pathlib import Path
+
+from version import argparse_version, display as build_id
+
+# --version before Qt, so `airplay-hub --version` works even if PyQt6 is
+# missing. After ./install.sh this is how you see which checkout is on disk.
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="AirPlay Hub")
+    parser.add_argument("--version", action="version", version=argparse_version())
+    parser.parse_args()
 
 from PyQt6.QtCore import Qt, QTimer, QProcess
 from PyQt6.QtGui import QIcon
@@ -47,6 +58,7 @@ STYLE = """
 QMainWindow, QDialog { background-color: #1b2733; }
 QLabel { color: #ecf0f1; }
 QLabel#header { font-size: 22px; font-weight: bold; color: #ecf0f1; }
+QLabel#build { color: #55697d; font-size: 11px; }
 QLabel#status { color: #8fa3b8; font-size: 13px; }
 QLabel#section {
     color: #6f8299; font-size: 11px; font-weight: bold; letter-spacing: 1px;
@@ -734,9 +746,16 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(18, 16, 18, 14)
         root.setSpacing(11)
 
+        title_row = QHBoxLayout()
         header = QLabel("AirPlay Hub")
         header.setObjectName("header")
-        root.addWidget(header)
+        title_row.addWidget(header)
+        title_row.addStretch(1)
+        build = QLabel(build_id())
+        build.setObjectName("build")
+        build.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(build)
+        root.addLayout(title_row)
 
         self.status = QLabel("Starting…")
         self.status.setObjectName("status")
