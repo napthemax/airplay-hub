@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The installed build — VERSION plus the short git commit when we have one.
 
-install.sh, airplay-hub --version and the phone page all call display() so
-the string cannot drift between them.
+ROOT is this file's directory (the checkout install.sh pointed the wrappers
+at), never the process cwd. install.sh, the window, --version and the phone
+page all call display() so the string cannot drift between them.
 """
 
 from __future__ import annotations
@@ -41,11 +42,18 @@ def git_sha() -> str | None:
     return sha or None
 
 
+def _with_v(number: str) -> str:
+    if number.startswith("v") or number == "unknown":
+        return number
+    return f"v{number}"
+
+
 def display() -> str:
+    shown = _with_v(version())
     sha = git_sha()
     if sha:
-        return f"{version()} · {sha}"
-    return f"{version()} · SHA unknown"
+        return f"{shown} · {sha}"
+    return f"{shown} · SHA unknown"
 
 
 def argparse_version() -> str:
