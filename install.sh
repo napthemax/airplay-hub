@@ -26,6 +26,19 @@ blue() { printf '\033[1;34m%s\033[0m\n' "$*"; }
 green() { printf '\033[1;32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 
+# Same string as `python version.py` / airplay-hub --version. Falls back to
+# VERSION on disk if Python cannot run; SHA unknown if this is not a git tree.
+build_id() {
+  local py
+  for py in python python3; do
+    command -v "$py" >/dev/null 2>&1 || continue
+    "$py" "$SRC/version.py" 2>/dev/null && return
+  done
+  local ver=unknown
+  [ -f "$SRC/VERSION" ] && ver=$(tr -d '[:space:]' < "$SRC/VERSION")
+  printf '%s · SHA unknown\n' "$ver"
+}
+
 if [ "${1:-}" = "--uninstall" ]; then
   blue "Removing AirPlay Hub"
   systemctl --user disable --now airplay-hub-web.service 2>/dev/null || true
@@ -42,6 +55,8 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 # ------------------------------------------------------------- 1. packages
+blue "Installing AirPlay Hub $(build_id)"
+echo
 blue "1/5  Checking system packages"
 
 missing=()
@@ -250,7 +265,7 @@ if ! loginctl show-user "$USER" 2>/dev/null | grep -q "Linger=yes"; then
 fi
 
 echo
-green "Done."
+green "Done. AirPlay Hub $(build_id)"
 echo
 echo "  Window:  look for \"AirPlay Hub\" in your application menu"
 # hostname -I comes back empty on a machine with only wifi and no hostname
