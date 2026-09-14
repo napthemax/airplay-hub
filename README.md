@@ -112,6 +112,37 @@ behind than that. Rooms of the same kind stay in sync with each other, so the
 gap only appears where AirPlay 1 and AirPlay 2 rooms play together. If that
 bothers you, one kind of receiver throughout is the real answer.
 
+## Delay the faster path (mixed AirPlay 1 + 2)
+
+Airfoil delays every output to the slowest protocol. This app can do the same
+at the hub, without touching PipeWire's RAOP latency — those overrides
+(`sess.latency.msec`, loopback `latency_msec`, a filter-chain delay sink)
+silence shairport-sync or feed back into the hub.
+
+When the house has **both** kinds of speaker, a **Hold back the faster path**
+control appears (window, below the room list; phone, below the rooms). It
+stores a delay in milliseconds and which feed it applies to:
+
+```
+AirPlayHub
+  ├─► PCM delay ─► AirPlayHubDelayed ─► loopback ─► AirPlay 1
+  └─► parec ─► fifo ─► OwnTone ─► AirPlay 2
+```
+
+**AirPlay 1 (PipeWire)** is the default path to delay. HomePods usually lag;
+holding the kitchen and the porch back at the hub is how they meet the
+bedroom, without eating OwnTone's start buffer. The per-room slider behind
+**i** stays as leftover trim.
+
+**Same-kind setup, or only one engine playing:** the stored value is idle.
+Nothing extra is delayed. Default is 0 ms.
+
+Set it by ear (clicks or a ping tone). A HomePod's own buffer cannot be read
+from outside; automatic measurement would need a microphone and is not in
+this version.
+
+The value is saved in `~/.config/airplay-hub/hubdelay.json`.
+
 ## Troubleshooting
 
 ```bash
@@ -138,6 +169,9 @@ Firefox ─┼─► "AirPlayHub" ──────────────┤
 Spotify ─┘                              └─► OwnTone ──► AirPlay 2 device
 ```
 
+With both kinds of speaker, an optional PCM delay can sit on the **faster**
+feed before that split (usually AirPlay 1). See [Delay the faster path](#delay-the-faster-path-mixed-airplay-1--2).
+
 Two paths, because both are needed: PipeWire reaches open AirPlay receivers
 directly, while HomePods and Apple TVs require FairPlay pairing that only
 OwnTone can do. Which path a room uses is shown behind the **i** button, but
@@ -153,6 +187,7 @@ you never have to choose.
 | `pwhub.py` | The PipeWire side |
 | `owntone.py` | The OwnTone side |
 | `bridge.py` | Feeds OwnTone with the machine's audio |
+| `hubdelay.py` | Delay-to-slowest: PCM delay on the faster hub feed |
 | `install.sh` | Install and uninstall |
 | `setup-owntone.sh` | Makes OwnTone ready to run |
 | `sync.sh` | Shows and adjusts timing between rooms |

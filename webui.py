@@ -117,6 +117,19 @@ PAGE = """<!doctype html>
     display: none; margin: 0 18px 14px; padding: 10px 14px;
     background: #4a2f2f; color: #f0c8c8; border-radius: 10px; font-size: 13px;
   }
+  .hubdelay {
+    margin: 6px 18px 18px; padding: 12px 14px;
+    background: #22303f; border-radius: 12px;
+  }
+  .hubdelay label { color: #8fa3b8; font-size: 12px; letter-spacing: .5px; }
+  .hubdelay h2 { margin: 0 0 6px; font-size: 15px; }
+  .hubdelay p { color: #8fa3b8; font-size: 13px; margin: 0 0 8px; }
+  .hubdelay select {
+    width: 100%; margin: 0 0 8px; padding: 8px;
+    background: #2b3d4f; color: #dbe6f0; border: 0; border-radius: 8px;
+  }
+  .hubdelay .now { color: #dbe6f0; font-size: 13px; }
+
 </style>
 </head>
 <body>
@@ -131,9 +144,22 @@ PAGE = """<!doctype html>
 </div>
 <div class="section">ROOMS</div>
 <ul id="rooms"></ul>
+<div id="hubdelay" class="hubdelay" hidden>
+  <h2>Hold back the faster path</h2>
+  <p id="hubdelay-note"></p>
+  <label for="hubdelay-path">Delay</label>
+  <select id="hubdelay-path">
+    <option value="pipewire">AirPlay 1 (PipeWire) — usually ahead</option>
+    <option value="owntone">AirPlay 2 (OwnTone) — only if HomePods lead</option>
+  </select>
+  <input type="range" id="hubdelay-ms" min="0" max="4000" step="50" value="0">
+  <p class="now" id="hubdelay-now"></p>
+  <p id="hubdelay-path-text"></p>
+</div>
 
 <script>
 let dragging = false;
+let draggingDelay = false;
 
 async function api(path, body) {
   const opt = body ? {
@@ -240,6 +266,28 @@ function render(data) {
   }
   // Keep the same order the server sent.
   data.rooms.forEach(room => ul.appendChild(rows.get(room.key).li));
+
+  const delay = data.hubdelay || {};
+  const box = document.getElementById("hubdelay");
+  box.hidden = !delay.mixed;
+  if (delay.mixed) {
+    document.getElementById("hubdelay-note").textContent = delay.note || "";
+    document.getElementById("hubdelay-path-text").textContent = delay.audio_path || "";
+    const sel = document.getElementById("hubdelay-path");
+    const ms = document.getElementById("hubdelay-ms");
+    if (!draggingDelay) {
+      if (document.activeElement !== sel) sel.value = delay.path || "pipewire";
+      if (document.activeElement !== ms) {
+        ms.min = delay.min_ms; ms.max = delay.max_ms; ms.value = delay.stored_ms;
+      }
+    }
+    const now = document.getElementById("hubdelay-now");
+    if (delay.applied_ms) now.textContent = delay.applied_ms + " ms applied";
+    else if (delay.stored_ms && delay.idle_reason === "one-engine-playing")
+      now.textContent = delay.stored_ms + " ms stored — applies when both kinds play";
+    else if (delay.stored_ms) now.textContent = delay.stored_ms + " ms stored";
+    else now.textContent = "no extra delay";
+  }
 }
 
 function lost() {
@@ -252,8 +300,21 @@ document.getElementById("master").onchange = async (e) => {
 };
 document.getElementById("master").oninput = () => { dragging = true; };
 
+document.getElementById("hubdelay-ms").oninput = () => {
+  draggingDelay = true;
+  document.getElementById("hubdelay-now").textContent = document.getElementById("hubdelay-ms").value + " ms";
+};
+async function commitDelay() {
+  draggingDelay = false;
+  const delay_ms = +document.getElementById("hubdelay-ms").value;
+  const path = document.getElementById("hubdelay-path").value;
+  try { render(await api("/api/hubdelay", {delay_ms, path})); } catch (err) { lost(); }
+}
+document.getElementById("hubdelay-ms").onchange = commitDelay;
+document.getElementById("hubdelay-path").onchange = commitDelay;
+
 async function tick() {
-  if (!dragging) {
+  if (!dragging && !draggingDelay) {
     try { render(await api("/api/rooms")); } catch (e) { lost(); }
   }
   setTimeout(tick, 2000);
@@ -303,7 +364,10 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _state(self) -> dict:
-        current = rooms.list_rooms()
+        try:
+            current = rooms.list_rooms()
+        except pwhub.PactlError:
+            current = []
         warning = ""
         if rooms.any_owntone_on(current):
             if not bridge.is_running():
@@ -317,6 +381,7 @@ class Handler(BaseHTTPRequestHandler):
         return {
             "master": master,
             "warning": warning,
+            "hubdelay": rooms.hub_delay_status(current),
             "rooms": [
                 {
                     "key": r.key,
@@ -352,6 +417,18 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 pwhub.set_sink_volume(pwhub.HUB_SINK, int(body.get("volume", 100)))
             except (pwhub.PactlError, ValueError) as exc:
+                self._send(500, {"error": str(exc)})
+                return
+            self._send(200, self._state())
+            return
+
+        if path == "/api/hubdelay":
+            try:
+                rooms.set_hub_delay(
+                    int(body.get("delay_ms", 0)),
+                    body.get("path"),
+                )
+            except Exception as exc:
                 self._send(500, {"error": str(exc)})
                 return
             self._send(200, self._state())

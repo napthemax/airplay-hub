@@ -13,9 +13,9 @@ Swedish; the project is not.
 ## Architecture — two engines, one list
 
 ```
-PlexAmp ─┐                              ┌─► loopback ─► RAOP sink ─► AirPlay 1 device
+PlexAmp ─┐                              ┌─► [optional PCM delay] ─► loopback ─► RAOP sink ─► AirPlay 1 device
 Firefox ─┼─► null sink "AirPlayHub" ────┤
-Spotify ─┘                              └─► parec ─► fifo ─► OwnTone ─► AirPlay 2 device
+Spotify ─┘                              └─► parec ─► [optional PCM delay] ─► fifo ─► OwnTone ─► AirPlay 2 device
 ```
 
 - **PipeWire/RAOP** for devices without FairPlay. Driven through `pactl`: one
@@ -61,6 +61,7 @@ the phone gets it for free.
 | `pwhub.py` | PipeWire backend, everything through `pactl` |
 | `owntone.py` | OwnTone JSON API client, stdlib only |
 | `bridge.py` | Starts and stops the `parec` that feeds OwnTone's fifo |
+| `hubdelay.py` | Delay-to-slowest: PCM delay on the faster hub feed (mixed engines) |
 | `probe-raop.sh` | Reads devices' mDNS TXT: who can be reached, and why not |
 | `diagnose.sh` | Environment check when nothing is heard |
 | `owntone-bridge.sh` | fifo + `parec` by hand; `--install-unit` writes a user unit |
@@ -245,6 +246,22 @@ HTTP 400 on select, check this value first.
 Do not go looking for a PipeWire-side latency knob again. There isn't one that
 both moves the audio and leaves the receiver playing.
 
+**Hub delay (Track B) is the remaining lever, and it is not a PipeWire latency
+knob.** `hubdelay.py` inserts an explicit PCM delay line on the faster feed
+*before* the split — either `parec | delay | paplay` into a second null sink
+(`AirPlayHubDelayed`) that the AirPlay 1 loopbacks then read, or the same
+delay between parec and OwnTone's fifo. The second sink is `module-null-sink`,
+not a filter-chain: nothing links its playback ports back into AirPlayHub.
+Loopback `latency_msec` stays at the existing default; RAOP `sess.latency.msec`
+is never set.
+
+It applies only while both engines are actually playing. Same-engine houses,
+and mixed houses with only one engine on, stay at zero extra delay. Default
+stored value is 0. The number is set by ear; a HomePod's device buffer still
+cannot be read from outside. Per-room `offset_ms` and `start_buffer_ms` remain
+residual trim — prefer hub delay on AirPlay 1 over dragging a HomePod toward
+earlier, which eats start-buffer headroom.
+
 **But both ways of making a HomePod earlier draw on the same buffer**, so they
 fight each other. `start_buffer_ms = 1250` clipped on its own, and offset -2000
 against the 2250 default clipped too — 250 ms of headroom is not enough. The
@@ -254,20 +271,19 @@ means roughly 2500, which is what it now runs at.
 
 The practical recipe for a HomePod that lags, in order:
 
-1. `start_buffer_ms` high enough that the offset does not clip (offset + ~500)
-2. the room's slider at the bottom, -2000
-3. `./sync.sh +N` until the PipeWire rooms meet it
+1. Hub delay on AirPlay 1 (Hold back the faster path) until the rooms meet
+2. `start_buffer_ms` high enough that any leftover OwnTone offset does not clip
+3. the room's slider for residual trim only
+4. Do **not** use `./sync.sh +N` / `sess.latency.msec` — that mode is gone because it silences shairport-sync
 
-That lands around 3200 ms end to end. It is a lot of latency, and it shows when
-starting playback, but it is what an AirPlay 2 speaker costs. PipeWire has no
-equivalent worth trusting — `latency_msec` on the loopback can be set but
-PipeWire still picks its own period size (asked for 400, got 133), so those
-rooms are shifted together with `sync.sh` instead. That is good enough, since
-they are already in phase with each other: same engine, same buffer.
+End-to-end latency is whatever the hub delay plus OwnTone's start buffer add
+up to. It shows when starting playback. Same-engine rooms stay in phase with
+each other without this control.
 
-The slider is only shown when the house actually runs both engines, see
-`rooms.mixed_engines()`. With only AirPlay 1 speakers, or only AirPlay 2, it
-would be a knob inviting you to break something that already works.
+The hub-delay control and the per-room slider are only shown when the house
+actually runs both engines, see `rooms.mixed_engines()`. With only AirPlay 1
+speakers, or only AirPlay 2, they would be knobs inviting you to break
+something that already works.
 
 The warning `sess.latency.msec ... should be an integer multiple of rtp.ptime`
 cannot be avoided except at 3520 ms: the packet length is 3520/441 ms, and that
