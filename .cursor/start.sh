@@ -25,8 +25,16 @@ chmod 700 "$XDG_RUNTIME_DIR"
 ENVFILE="${XDG_RUNTIME_DIR}/airplay-hub.env"
 
 # --- system bus + avahi (mDNS) -------------------------------------------
+# Test for a *live* bus, not just the socket file: a fresh pod can carry a
+# leftover /run/dbus/system_bus_socket from image-build time with no daemon
+# behind it. A bare `[ -S ... ]` guard would then skip launching dbus, and
+# avahi (hence RAOP discovery) would fail with "Connection refused".
 sudo mkdir -p /run/dbus
-sudo sh -c '[ -S /run/dbus/system_bus_socket ] || dbus-daemon --system --fork'
+if ! sudo dbus-send --system --dest=org.freedesktop.DBus --type=method_call \
+      --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
+  sudo rm -f /run/dbus/system_bus_socket /run/dbus/pid
+  sudo dbus-daemon --system --fork
+fi
 sudo sh -c 'pidof avahi-daemon >/dev/null 2>&1 || avahi-daemon -D' || true
 
 # --- session bus (for wireplumber) ---------------------------------------
