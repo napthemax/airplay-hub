@@ -24,6 +24,7 @@ import fcntl
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 # The format is not negotiable. OwnTone reads the pipe as raw PCM and does not
@@ -61,13 +62,82 @@ def _pids() -> list[int]:
             continue
         if os.path.basename(argv[0].decode(errors="replace")) != "parec":
             continue
-        if any(arg.decode(errors="replace") == f"--device={DEVICE}" for arg in argv[1:]):
+        args = [arg.decode(errors="replace") for arg in argv[1:]]
+        # The hub-delay worker also runs parec against the same monitor.
+        # It tags itself; leaving it in this list would let stop() kill the
+        # AirPlay 1 delay when an OwnTone room is switched off.
+        if any(arg == "--client-name=AirPlayHubDelay" for arg in args):
+            continue
+        if any(arg == f"--device={DEVICE}" for arg in args):
             pids.append(int(entry.name))
     return pids
 
 
 def is_running() -> bool:
-    return bool(_pids())
+    return bool(_pids()) or bool(_fifo_delay_pids())
+
+
+def _fifo_delay_pids() -> list[int]:
+    """python hubdelay.py --pcm-delay that is writing our fifo."""
+    pids: list[int] = []
+    fifo = str(FIFO)
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if not argv or not argv[0]:
+            continue
+        base = os.path.basename(argv[0].decode(errors="replace"))
+        if not (base == "python" or base.startswith("python3")):
+            continue
+        args = [a.decode(errors="replace") for a in argv[1:] if a]
+        if not any(os.path.basename(a) == "hubdelay.py" for a in args):
+            continue
+        if "--pcm-delay" not in args:
+            continue
+        if "--pipewire-delay" in args:
+            continue
+        if _pid_writes_path(int(entry.name), fifo):
+            pids.append(int(entry.name))
+    return pids
+
+
+def _pid_writes_path(pid: int, path: str) -> bool:
+    fd_dir = Path(f"/proc/{pid}/fd")
+    try:
+        entries = list(fd_dir.iterdir())
+    except OSError:
+        return False
+    for link in entries:
+        try:
+            target = os.readlink(link)
+        except OSError:
+            continue
+        if target == path:
+            return True
+    return False
+
+
+def feed_delay_ms() -> int:
+    """Extra PCM delay in front of the fifo, or 0 for a straight parec."""
+    for pid in _fifo_delay_pids():
+        try:
+            argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        args = [a.decode(errors="replace") for a in argv if a]
+        if "--pcm-delay" not in args:
+            continue
+        idx = args.index("--pcm-delay")
+        if idx + 1 < len(args):
+            try:
+                return max(0, int(args[idx + 1]))
+            except ValueError:
+                return 0
+    return 0
 
 
 def fifo_ready() -> tuple[bool, str]:
@@ -81,10 +151,18 @@ def fifo_ready() -> tuple[bool, str]:
     return True, ""
 
 
-def start() -> None:
-    """Start the bridge unless it is already running. Idempotent."""
+def start(delay_ms: int = 0) -> None:
+    """Start the bridge unless it is already running. Idempotent.
+
+    delay_ms inserts a PCM delay line between parec and the fifo (Track B,
+    path=owntone). Zero is the normal pass-through. If a feed is already
+    running at a different delay, it is restarted so the new value lands.
+    """
+    want = max(0, int(delay_ms))
     if is_running():
-        return
+        if feed_delay_ms() == want:
+            return
+        stop()
     ok, why = fifo_ready()
     if not ok:
         raise BridgeError(why)
@@ -111,19 +189,44 @@ def start() -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
 
+    parec_cmd = [
+        "parec",
+        f"--device={DEVICE}",
+        f"--format={FORMAT}",
+        f"--rate={RATE}",
+        f"--channels={CHANNELS}",
+    ]
     try:
-        subprocess.Popen(
-            [
-                "parec",
-                f"--device={DEVICE}",
-                f"--format={FORMAT}",
-                f"--rate={RATE}",
-                f"--channels={CHANNELS}",
-            ],
-            stdout=fd,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        if want <= 0:
+            subprocess.Popen(
+                parec_cmd,
+                stdout=fd,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        else:
+            # parec → hubdelay.py --pcm-delay → fifo. The delay process is
+            # the session leader so stop() can tear the pair down together.
+            helper = Path(__file__).resolve().parent / "hubdelay.py"
+            delay_proc = subprocess.Popen(
+                [sys.executable, str(helper), "--pcm-delay", str(want)],
+                stdin=subprocess.PIPE,
+                stdout=fd,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                bufsize=0,
+            )
+            try:
+                subprocess.Popen(
+                    parec_cmd,
+                    stdout=delay_proc.stdin,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                delay_proc.kill()
+                raise
+            if delay_proc.stdin is not None:
+                delay_proc.stdin.close()
     except FileNotFoundError as exc:
         os.close(fd)
         raise BridgeError("parec is missing — install libpulse") from exc
@@ -135,6 +238,14 @@ def start() -> None:
 
 def stop() -> None:
     """Stop the bridge. Does nothing if it is already down."""
+    for pid in _fifo_delay_pids():
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
     for pid in _pids():
         try:
             os.kill(pid, signal.SIGTERM)

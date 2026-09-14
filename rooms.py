@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import bridge
+import hubdelay
 import owntone
 import pwhub
 
@@ -242,6 +243,13 @@ def _details(room: Room, out: owntone.Output | None, sink: pwhub.Sink | None) ->
     if room.engine == "owntone":
         rows.append(("Audio path", "hub → parec → fifo → OwnTone → speaker"))
         rows.append(("Feed", "running" if bridge.is_running() else "idle"))
+        delay = hubdelay.load()
+        if delay.delay_ms and delay.path == hubdelay.PATH_OWNTONE:
+            rows.append((
+                "Hub delay",
+                f"{delay.delay_ms} ms on this path when AirPlay 1 and AirPlay 2 "
+                "play together (PCM into the fifo, not a PipeWire latency knob)",
+            ))
         if room.offset_ms:
             direction = "later" if room.offset_ms > 0 else "earlier"
             rows.append(("Timing", f"{room.offset_ms:+d} ms ({direction} than the others)"))
@@ -251,10 +259,18 @@ def _details(room: Room, out: owntone.Output | None, sink: pwhub.Sink | None) ->
             rows.append(("OwnTone id", out.id))
     else:
         rows.append(("Audio path", "hub → loopback → speaker"))
+        delay = hubdelay.load()
+        if delay.delay_ms and delay.path == hubdelay.PATH_PIPEWIRE:
+            rows.append((
+                "Hub delay",
+                f"{delay.delay_ms} ms on this path when AirPlay 1 and AirPlay 2 "
+                "play together (PCM before the loopbacks, not sess.latency.msec)",
+            ))
         rows.append((
             "Timing",
             "follows the other AirPlay 1 rooms — they stay in step with each "
-            "other. There is no safe per-room delay on this path.",
+            "other. There is no safe per-room delay on this path. The hub "
+            "delay holds the whole AirPlay 1 feed back together.",
         ))
         # The sink only means anything for rooms that actually go via PipeWire.
         if sink is not None:
@@ -274,7 +290,7 @@ def set_on(room: Room, on: bool) -> None:
         owntone.select(room.target, on)
         return
     if on:
-        pwhub.route_on(room.target)
+        pwhub.route_on(room.target, source=hubdelay.pipewire_monitor())
     else:
         pwhub.route_off(room.target)
 
@@ -350,6 +366,49 @@ def mixed_engines(current: list[Room] | None = None) -> bool:
     return len(engines) > 1
 
 
+def both_engines_playing(current: list[Room] | None = None) -> bool:
+    """Are AirPlay 1 and AirPlay 2 rooms actually playing at the same time?
+
+    A mixed house with only one engine on is same-engine playback: extra hub
+    delay would just add latency for no one to match.
+    """
+    if current is None:
+        current = list_rooms()
+    engines = {r.engine for r in current if r.on and r.reachable}
+    return "pipewire" in engines and "owntone" in engines
+
+
+def hub_delay_status(current: list[Room] | None = None) -> dict:
+    """Facts both the window and the phone UI share about delay-to-slowest."""
+    if current is None:
+        current = list_rooms()
+    return hubdelay.status(
+        mixed=mixed_engines(current),
+        both_playing=both_engines_playing(current),
+    )
+
+
+def set_hub_delay(delay_ms: int, path: str | None = None,
+                  current: list[Room] | None = None) -> list[str]:
+    """Persist the hub delay and apply it if both engines are playing."""
+    settings = hubdelay.save(delay_ms, path)
+    try:
+        ensure_hub()
+    except pwhub.PactlError as extra:
+        return [
+            f"Hub delay stored: {settings.delay_ms} ms on {settings.path}.",
+            f"Could not apply it: {extra}",
+        ]
+    if current is None:
+        current = list_rooms()
+    messages = sync_stream(current)
+    messages.insert(
+        0,
+        f"Hub delay stored: {settings.delay_ms} ms on {settings.path}.",
+    )
+    return messages
+
+
 def sync_stream(current: list[Room] | None = None) -> list[str]:
     """Make sure audio actually goes out. Returns lines worth logging.
 
@@ -365,12 +424,33 @@ def sync_stream(current: list[Room] | None = None) -> list[str]:
     messages: list[str] = []
 
     if any_owntone_on(current):
+        ot_delay = hubdelay.owntone_delay_ms(
+            mixed_engines(current), both_engines_playing(current)
+        )
         if not bridge.is_running():
             try:
-                bridge.start()
-                messages.append("Started the audio feed to OwnTone.")
+                bridge.start(delay_ms=ot_delay)
+                if ot_delay:
+                    messages.append(
+                        f"Started the audio feed to OwnTone with a {ot_delay} ms hub delay."
+                    )
+                else:
+                    messages.append("Started the audio feed to OwnTone.")
             except bridge.BridgeError as exc:
                 messages.append(f"Audio feed did not start: {exc}")
+                return messages
+        elif bridge.feed_delay_ms() != ot_delay:
+            try:
+                bridge.stop()
+                bridge.start(delay_ms=ot_delay)
+                if ot_delay:
+                    messages.append(
+                        f"OwnTone feed now delayed by {ot_delay} ms at the hub."
+                    )
+                else:
+                    messages.append("OwnTone feed is undelayed again.")
+            except bridge.BridgeError as exc:
+                messages.append(f"Audio feed did not restart: {exc}")
                 return messages
         try:
             if owntone.player().get("state") != "play":
@@ -383,6 +463,16 @@ def sync_stream(current: list[Room] | None = None) -> list[str]:
         except owntone.OwnToneError:
             pass
         bridge.stop()
+
+    try:
+        messages.extend(
+            hubdelay.sync(
+                mixed=mixed_engines(current),
+                both_playing=both_engines_playing(current),
+            )
+        )
+    except hubdelay.DelayError as exc:
+        messages.append(f"Hub delay: {exc}")
 
     return messages
 
@@ -530,13 +620,16 @@ def sync_guide_text(buffer_ms: int | None = None) -> dict[str, str | list[str]]:
         "steps": [
             "Play the same audio in the rooms you want to match. The click track "
             "is easier to judge than music.",
+            "Start with Hold back the faster path (below the room list): delay "
+            "AirPlay 1 at the hub until the rooms meet. That does not eat "
+            "OwnTone's start buffer.",
             "A room that is ahead (you hear it first): delay it. On an AirPlay 2 "
             "room, open i, drag toward later, then release. The change takes "
             "effect after a short gap in that room.",
             "A room that lags (often a HomePod): do not drag toward earlier "
             "until the sound clips or goes silent. Negative offset eats OwnTone's "
             "start buffer — there is no earlier audio to play. Delay the rooms "
-            "that are ahead instead.",
+            "that are ahead instead (hub delay first, then this slider).",
             "If a HomePod still lags after that, raise OwnTone's start buffer "
             "so there is headroom, then try a modest earlier offset. Changing "
             "the buffer needs sudo and restarts OwnTone.",
@@ -552,7 +645,7 @@ def sync_guide_text(buffer_ms: int | None = None) -> dict[str, str | list[str]]:
         "avoid": (
             "Do not look for a PipeWire latency setting to slow AirPlay 1 rooms. "
             "Overriding sess.latency.msec or loopback latency silences "
-            "shairport-sync receivers."
+            "shairport-sync receivers. Use the hub delay instead."
         ),
     }
 

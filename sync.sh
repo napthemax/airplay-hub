@@ -53,6 +53,25 @@ for o in [o for o in outs if o.get('offset_ms')]:
     print(f\"    {o['name']}: slider {v:+d} ms ({'later' if v > 0 else 'earlier'})\")
 " || true
   echo
+  python3 - <<'PY'
+import json, os
+from pathlib import Path
+xdg = os.environ.get("XDG_CONFIG_HOME")
+base = Path(xdg) if xdg else Path.home() / ".config"
+path = Path(os.environ.get("AIRPLAYHUB_CONFIG", base / "airplay-hub")) / "hubdelay.json"
+print("  Hub delay (delay-to-slowest, mixed engines only)")
+try:
+    data = json.loads(path.read_text())
+    ms = int(data.get("delay_ms") or 0)
+    which = data.get("path") or "pipewire"
+    extra = "AirPlay 1 / PipeWire" if which == "pipewire" else "AirPlay 2 / OwnTone"
+    print(f"    {ms} ms on {extra}")
+    print("    Applies only while both kinds of room play. 0 ms = off.")
+    print("    Not sess.latency.msec / loopback latency / filter-chain.")
+except Exception:
+    print("    none stored (0 ms)")
+PY
+  echo
   local down up
   down=$(( $(ot_ms) - 250 )); [ "$down" -lt "$MIN_BUFFER" ] && down=$MIN_BUFFER
   up=$(( $(ot_ms) + 250 ))

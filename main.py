@@ -202,9 +202,11 @@ class InfoDialog(QDialog):
         note = QLabel(
             "This room stays in step with the other AirPlay 1 rooms. There is "
             "no safe per-room delay on this path — it would silence the "
-            "speaker. If an AirPlay 2 room is ahead of this one, delay that "
-            "room from its own info button. If a HomePod lags, open the "
-            "timing guide rather than hunting for a PipeWire latency knob."
+            "speaker. Hold the whole AirPlay 1 feed back with the hub delay "
+            "under the room list. If an AirPlay 2 room is ahead of this one, "
+            "delay that room from its own info button. If a HomePod lags, "
+            "use the hub delay first, then the timing guide — not a PipeWire "
+            "latency knob."
         )
         note.setObjectName("oknote")
         note.setWordWrap(True)
@@ -592,6 +594,131 @@ class RoomRow(QFrame):
             self.volume.setEnabled(True)
 
 
+class HubDelayBox(QFrame):
+    """Delay-to-slowest: hold the faster hub feed back, by ear.
+
+    Shown only when the house has both engines. The value is stored even when
+    only one engine is playing; it takes effect once both are on. Lives here
+    rather than behind i so it is clearly a hub setting, not a per-room trim.
+    """
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__()
+        self.window_ref = window
+        self.setObjectName("syncbox")
+        self._busy = False
+        col = QVBoxLayout(self)
+        col.setContentsMargins(13, 11, 13, 12)
+        col.setSpacing(7)
+
+        title = QLabel("Hold back the faster path")
+        title.setStyleSheet("color: #dbe6f0; font-size: 13px; font-weight: bold;")
+        col.addWidget(title)
+
+        self.explain = QLabel()
+        self.explain.setStyleSheet("color: #6f8299; font-size: 11px;")
+        self.explain.setWordWrap(True)
+        col.addWidget(self.explain)
+
+        path_row = QHBoxLayout()
+        path_lab = QLabel("Delay")
+        path_lab.setObjectName("pct")
+        path_row.addWidget(path_lab)
+        self.path = QComboBox()
+        self.path.addItem("AirPlay 1 (PipeWire) — usually ahead", "pipewire")
+        self.path.addItem("AirPlay 2 (OwnTone) — only if HomePods lead", "owntone")
+        self.path.currentIndexChanged.connect(self._on_path)
+        path_row.addWidget(self.path, 1)
+        col.addLayout(path_row)
+
+        slide = QHBoxLayout()
+        slide.setSpacing(9)
+        zero = QLabel("0")
+        zero.setStyleSheet("color: #55697d; font-size: 10px;")
+        slide.addWidget(zero)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 4000)
+        self.slider.setSingleStep(50)
+        self.slider.setPageStep(100)
+        self.slider.setTickInterval(500)
+        self.slider.valueChanged.connect(self._on_preview)
+        self.slider.sliderReleased.connect(self._on_commit)
+        slide.addWidget(self.slider, 1)
+        later = QLabel("later")
+        later.setStyleSheet("color: #55697d; font-size: 10px;")
+        slide.addWidget(later)
+        col.addLayout(slide)
+
+        self.value = QLabel()
+        self.value.setStyleSheet("color: #dbe6f0; font-size: 12px;")
+        col.addWidget(self.value)
+
+        self.path_line = QLabel()
+        self.path_line.setStyleSheet("color: #6f8299; font-size: 11px;")
+        self.path_line.setWordWrap(True)
+        col.addWidget(self.path_line)
+        self.hide()
+
+    def sync(self, current: list[rooms.Room]) -> None:
+        st = rooms.hub_delay_status(current)
+        self.setVisible(bool(st.get("mixed")))
+        if not st.get("mixed"):
+            return
+        self._busy = True
+        try:
+            self.slider.setRange(int(st["min_ms"]), int(st["max_ms"]))
+            if not self.slider.isSliderDown():
+                self.slider.setValue(int(st["stored_ms"]))
+            idx = self.path.findData(st["path"])
+            if idx >= 0:
+                self.path.setCurrentIndex(idx)
+            self.explain.setText(str(st["note"]))
+            self.path_line.setText(str(st["audio_path"]))
+            self._render_value(st)
+        finally:
+            self._busy = False
+
+    def _render_value(self, st: dict | None = None) -> None:
+        if st is None:
+            st = rooms.hub_delay_status(list(self.window_ref.rooms.values()))
+        stored = int(st.get("stored_ms") or 0)
+        applied = int(st.get("applied_ms") or 0)
+        if stored == 0:
+            self.value.setText("no extra delay")
+        elif applied:
+            self.value.setText(f"{applied} ms applied to {st.get('path_label', '')}")
+        else:
+            reason = st.get("idle_reason")
+            if reason == "one-engine-playing":
+                self.value.setText(f"{stored} ms stored — applies when both kinds play")
+            else:
+                self.value.setText(f"{stored} ms stored")
+
+    def _on_preview(self, value: int) -> None:
+        if self._busy:
+            return
+        self.value.setText(f"{value} ms")
+
+    def _on_path(self) -> None:
+        if self._busy:
+            return
+        self._commit()
+
+    def _on_commit(self) -> None:
+        if self._busy:
+            return
+        self._commit()
+
+    def _commit(self) -> None:
+        path = self.path.currentData()
+        try:
+            for line in rooms.set_hub_delay(self.slider.value(), path):
+                self.window_ref.log(line)
+        except Exception as exc:  # backend must not take the window down
+            self.window_ref.log(f"Hub delay failed: {exc}")
+        self.window_ref.refresh()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -669,6 +796,9 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.room_host)
         root.addWidget(scroll, 1)
 
+        self.delay_box = HubDelayBox(self)
+        root.addWidget(self.delay_box)
+
         self.logbox = QPlainTextEdit()
         self.logbox.setReadOnly(True)
         self.logbox.setFixedHeight(64)
@@ -699,6 +829,7 @@ class MainWindow(QMainWindow):
             return
 
         self.rooms = {r.key: r for r in found}
+        self.delay_box.sync(found)
 
         for room in found:
             row = self.rows.get(room.key)

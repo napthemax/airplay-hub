@@ -206,6 +206,8 @@ class WebMirrorTests(unittest.TestCase):
         self.assertIn("sync-clicks", webui.PAGE)
         self.assertIn("/api/sync/clicks", webui.PAGE)
         self.assertIn("/offset", webui.PAGE)
+        self.assertIn("Hold back the faster path", webui.PAGE)
+        self.assertIn("/api/hubdelay", webui.PAGE)
 
 
 if __name__ == "__main__":

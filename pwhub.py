@@ -5,8 +5,11 @@ Backend for AirPlay Hub — all talk to PipeWire/PulseAudio goes through pactl.
 The audio path (no ffmpeg involved):
 
     PlexAmp ─┐
-    Firefox ─┼─► null sink "AirPlayHub" ─► one loopback per active device
+    Firefox ─┼─► null sink "AirPlayHub" ─► (optional PCM delay) ─► loopback
     Spotify ─┘                           ─► PipeWire's RAOP sink ─► the speaker
+
+The optional delay is a second null sink plus a PCM worker, never a RAOP or
+loopback latency override — those silence shairport-sync or do nothing.
 
 One loopback per device means the same audio reaches every selected device at
 once, and that devices can be switched on and off while playing without cutting
@@ -22,6 +25,10 @@ from dataclasses import dataclass
 
 HUB_SINK = "AirPlayHub"
 HUB_DESC = "AirPlay Hub"
+# Separate null sink that holds the delayed AirPlay 1 feed. Not a filter-chain:
+# those looped back into the hub. Only the PCM delay worker writes here.
+DELAYED_SINK = "AirPlayHubDelayed"
+DELAYED_DESC = "AirPlay Hub (delayed)"
 DEFAULT_LATENCY_MS = 400
 
 
@@ -86,7 +93,10 @@ def list_sinks() -> list[Sink]:
 
 def _list_sinks_text() -> list[Sink]:
     """Fallback when pactl has no -f json (older libpulse)."""
-    text = run(["pactl", "list", "sinks"])
+    try:
+        text = run(["pactl", "list", "sinks"])
+    except PactlError:
+        return []
     sinks: list[Sink] = []
     cur: Sink | None = None
     for line in text.splitlines():
@@ -236,13 +246,69 @@ def destroy_hub() -> None:
             unload_module(module.index)
 
 
+def hub_monitor() -> str:
+    return f"{HUB_SINK}.monitor"
+
+
+def delayed_monitor() -> str:
+    return f"{DELAYED_SINK}.monitor"
+
+
+def _hub_monitors() -> set[str]:
+    return {hub_monitor(), delayed_monitor()}
+
+
+def delayed_hub_exists() -> bool:
+    return sink_exists(DELAYED_SINK)
+
+
+def create_delayed_hub() -> None:
+    """Null sink in the same format as the hub, for the delayed AirPlay 1 feed.
+
+    A filter-chain delay node was tried and rejected: its playback side is
+    passive, so PipeWire linked it back into AirPlayHub and the audio circled.
+    This is just another module-null-sink. Nothing reads its playback ports
+    except paplay from the delay worker; loopbacks read the monitor.
+    """
+    run(
+        [
+            "pactl",
+            "load-module",
+            "module-null-sink",
+            f"sink_name={DELAYED_SINK}",
+            "rate=44100",
+            "channels=2",
+            "format=s16le",
+            f'sink_properties=device.description="{DELAYED_DESC}",node.pause-on-idle=false',
+        ]
+    )
+
+
+def ensure_delayed_hub() -> bool:
+    """Load the delayed sink if it is missing. Returns True if it had to."""
+    if delayed_hub_exists():
+        return False
+    create_delayed_hub()
+    return True
+
+
+def destroy_delayed_hub() -> None:
+    for module in list_modules():
+        if module.name == "module-null-sink" and _arg_value(module.argument, "sink_name") == DELAYED_SINK:
+            unload_module(module.index)
+
+
 def active_routes() -> dict[str, int]:
-    """{raop sink name: module index} for every loopback fed by the hub."""
+    """{raop sink name: module index} for every loopback fed by the hub.
+
+    Includes loopbacks that read the delayed monitor — they are still the
+    same rooms, just held back at the hub.
+    """
     routes: dict[str, int] = {}
     for module in list_modules():
         if module.name != "module-loopback":
             continue
-        if _arg_value(module.argument, "source") != f"{HUB_SINK}.monitor":
+        if _arg_value(module.argument, "source") not in _hub_monitors():
             continue
         sink = _arg_value(module.argument, "sink")
         if sink:
@@ -250,13 +316,35 @@ def active_routes() -> dict[str, int]:
     return routes
 
 
-def route_on(sink_name: str, latency_ms: int = DEFAULT_LATENCY_MS) -> int:
+def route_source(sink_name: str) -> str | None:
+    """Which hub monitor feeds this RAOP loopback, if any."""
+    for module in list_modules():
+        if module.name != "module-loopback":
+            continue
+        if _arg_value(module.argument, "sink") != sink_name:
+            continue
+        source = _arg_value(module.argument, "source")
+        if source in _hub_monitors():
+            return source
+    return None
+
+
+def route_on(
+    sink_name: str,
+    latency_ms: int = DEFAULT_LATENCY_MS,
+    source: str | None = None,
+) -> int:
+    # latency_msec is PipeWire's existing default on this loopback, left
+    # alone on purpose. Overriding it was tried: the value is ignored (asked
+    # for 400 ms, got 133) and chasing RAOP latency from here silences
+    # shairport-sync. The hub delay lives in hubdelay.py instead.
+    src = source or hub_monitor()
     out = run(
         [
             "pactl",
             "load-module",
             "module-loopback",
-            f"source={HUB_SINK}.monitor",
+            f"source={src}",
             f"sink={sink_name}",
             f"latency_msec={latency_ms}",
             "source_dont_move=true",
@@ -265,6 +353,26 @@ def route_on(sink_name: str, latency_ms: int = DEFAULT_LATENCY_MS) -> int:
     )
     digits = [line.strip() for line in out.splitlines() if line.strip().isdigit()]
     return int(digits[-1]) if digits else -1
+
+
+def retarget_hub_routes(want_source: str) -> int:
+    """Point every hub-fed loopback at want_source. Returns how many moved."""
+    moved = 0
+    for sink_name, index in list(active_routes().items()):
+        current = route_source(sink_name)
+        if current == want_source:
+            continue
+        try:
+            unload_module(index)
+            route_on(sink_name, source=want_source)
+            moved += 1
+        except PactlError:
+            # Best-effort: a vanished sink is pruned elsewhere.
+            try:
+                unload_module(index)
+            except PactlError:
+                pass
+    return moved
 
 
 def route_off(sink_name: str) -> None:
