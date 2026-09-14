@@ -216,10 +216,12 @@ you never have to choose.
 ## Versioning
 
 The number in `VERSION` is what is installed. `./install.sh` prints it with
-the short git commit, and so do `airplay-hub --version` and the phone page.
+the short git commit, and so do `airplay-hub --version`, the main window
+(under the title, no menu) and the phone page. All of them show the same
+string, e.g. `v0.2.1 · abc1234`.
 
 For a new release: bump `VERSION`, commit, merge, then tag it
-(`git tag v0.2.0` and `git push origin v0.2.0`). GitHub Releases can wait.
+(`git tag v0.2.1` and `git push origin v0.2.1`). GitHub Releases can wait.
 
 ## License
 

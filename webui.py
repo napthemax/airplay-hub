@@ -74,7 +74,7 @@ PAGE = """<!doctype html>
   }
   header { padding: 18px 18px 10px; }
   h1 { margin: 0; font-size: 22px; }
-  #build { color: #55697d; font-size: 11px; margin-top: 4px; }
+  #build { color: #8fa3b8; font-size: 12px; margin-top: 4px; }
   #status { color: #8fa3b8; font-size: 13px; margin-top: 4px; }
   .master {
     margin: 6px 18px 14px; padding: 12px 14px;

@@ -58,7 +58,7 @@ STYLE = """
 QMainWindow, QDialog { background-color: #1b2733; }
 QLabel { color: #ecf0f1; }
 QLabel#header { font-size: 22px; font-weight: bold; color: #ecf0f1; }
-QLabel#build { color: #55697d; font-size: 11px; }
+QLabel#build { color: #8fa3b8; font-size: 12px; }
 QLabel#status { color: #8fa3b8; font-size: 13px; }
 QLabel#section {
     color: #6f8299; font-size: 11px; font-weight: bold; letter-spacing: 1px;
@@ -746,16 +746,18 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(18, 16, 18, 14)
         root.setSpacing(11)
 
-        title_row = QHBoxLayout()
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
         header = QLabel("AirPlay Hub")
         header.setObjectName("header")
-        title_row.addWidget(header)
-        title_row.addStretch(1)
+        heading.addWidget(header)
+        # Same string as install.sh / --version / the phone page. Under the
+        # title so it is actually readable — no About menu.
         build = QLabel(build_id())
         build.setObjectName("build")
-        build.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        title_row.addWidget(build)
-        root.addLayout(title_row)
+        build.setToolTip("Installed build")
+        heading.addWidget(build)
+        root.addLayout(heading)
 
         self.status = QLabel("Starting…")
         self.status.setObjectName("status")
