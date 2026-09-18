@@ -1,0 +1,15 @@
+{
+  "name": "AirPlay Hub",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "web-interface",
+      "command": "export XDG_RUNTIME_DIR=/run/user/$(id -u); [ -f \"$XDG_RUNTIME_DIR/airplay-hub.env\" ] && . \"$XDG_RUNTIME_DIR/airplay-hub.env\"; exec python webui.py",
+      "description": "The phone web interface (webui.py) on port 8730. Serves the room list and controls; reads live state from PipeWire via pactl."
+    }
+  ],
+  "ports": [
+    { "name": "web-interface", "port": 8730 }
+  ]
+}
