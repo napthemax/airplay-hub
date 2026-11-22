@@ -23,8 +23,19 @@ are actually playing:
       └─► parec ─► [PCM delay] ─► fifo ─► OwnTone                  (path=owntone)
 
 Same-engine houses, and mixed houses with only one engine on, get zero extra
-delay. The number is set by ear: a HomePod's own buffer cannot be read from
-outside, and auto-measure would need a microphone. Follow-up, not this file.
+delay.
+
+Manual mode keeps a fixed millisecond value (set by ear for residual trim).
+Auto mode estimates the engine gap that is safe to read without a microphone:
+
+    hub_delay ≈ max(0, OwnTone start_buffer_ms − PipeWire RAOP latency_ms)
+
+on the AirPlay 1 path. That is the bulk of the cross-engine lead when RAOP
+runs at PipeWire defaults (~1500 ms) and OwnTone at its start buffer
+(~2250 ms). Do not add a HomePod's arrivalToRenderLatencyMs — receivers
+already self-compensate that value, and applying it over-compensates
+(Music Assistant / airplay-cli). Device residual after the engines meet is
+still per-room offset / ear.
 
 Standard library only. State of the delay process is read from /proc, same
 idea as bridge.py — never pgrep -f.
@@ -55,6 +66,12 @@ PATH_OWNTONE = "owntone"
 PATHS = (PATH_PIPEWIRE, PATH_OWNTONE)
 DEFAULT_PATH = PATH_PIPEWIRE  # measured: AirPlay 1 runs ahead of a HomePod
 
+MODE_MANUAL = "manual"
+MODE_AUTO = "auto"
+MODES = (MODE_MANUAL, MODE_AUTO)
+# Fresh installs: close the measurable engine gap without touching the slider.
+DEFAULT_MODE = MODE_AUTO
+
 # parec/paplay client name, so bridge._pids() can leave this chain alone.
 CLIENT_NAME = "AirPlayHubDelay"
 
@@ -73,6 +90,7 @@ class DelayError(RuntimeError):
 class Settings:
     delay_ms: int = 0
     path: str = DEFAULT_PATH
+    mode: str = DEFAULT_MODE
 
 
 def config_dir() -> Path:
@@ -115,6 +133,48 @@ def clamp_path(path: str | None) -> str:
     return DEFAULT_PATH
 
 
+def clamp_mode(mode: str | None) -> str:
+    if mode in MODES:
+        return mode
+    return DEFAULT_MODE
+
+
+def estimate_ms(start_buffer_ms: int | float, raop_latency_ms: int | float) -> int:
+    """Engine-gap estimate for auto mode. Never negative; never past MAX_MS."""
+    try:
+        ot = int(round(float(start_buffer_ms)))
+    except (TypeError, ValueError):
+        ot = 0
+    try:
+        pw = int(round(float(raop_latency_ms)))
+    except (TypeError, ValueError):
+        pw = pwhub.DEFAULT_RAOP_LATENCY_MS
+    return clamp_ms(max(0, ot - pw))
+
+
+def resolve(
+    settings: Settings | None = None,
+    *,
+    start_buffer_ms: int | None = None,
+    raop_latency_ms: int | None = None,
+) -> Settings:
+    """Concrete delay/path to apply. Auto recomputes; manual returns as stored."""
+    cfg = settings if settings is not None else load()
+    if cfg.mode != MODE_AUTO:
+        return cfg
+    if start_buffer_ms is None:
+        import owntone
+
+        start_buffer_ms = owntone.start_buffer_ms()
+    if raop_latency_ms is None:
+        raop_latency_ms = pwhub.raop_latency_ms()
+    return Settings(
+        delay_ms=estimate_ms(start_buffer_ms, raop_latency_ms),
+        path=PATH_PIPEWIRE,
+        mode=MODE_AUTO,
+    )
+
+
 def load() -> Settings:
     path = _settings_path()
     try:
@@ -123,23 +183,51 @@ def load() -> Settings:
         return Settings()
     if not isinstance(data, dict):
         return Settings()
+    # Files written before auto mode had no "mode" key. Keep their fixed
+    # delay_ms as manual so an intentional 0 or ear-tuned value is not
+    # overwritten by the estimate.
+    if "mode" in data:
+        mode = clamp_mode(data.get("mode"))
+    else:
+        mode = MODE_MANUAL
     return Settings(
         delay_ms=clamp_ms(data.get("delay_ms", 0)),
         path=clamp_path(data.get("path")),
+        mode=mode,
     )
 
 
-def save(delay_ms: int, path: str | None = None) -> Settings:
+def save(
+    delay_ms: int,
+    path: str | None = None,
+    mode: str | None = None,
+) -> Settings:
     current = load()
+    # A write that does not name a mode is a manual lock of this value —
+    # moving the slider, the phone control, or an old caller. Auto is only
+    # entered when mode="auto" is passed explicitly (checkbox / API).
+    want_mode = clamp_mode(mode) if mode is not None else MODE_MANUAL
     settings = Settings(
         delay_ms=clamp_ms(delay_ms),
         path=clamp_path(path if path is not None else current.path),
+        mode=want_mode,
     )
+    if settings.mode == MODE_AUTO:
+        # Auto always holds AirPlay 1; the owntone path is manual-only.
+        settings = Settings(
+            delay_ms=settings.delay_ms,
+            path=PATH_PIPEWIRE,
+            mode=MODE_AUTO,
+        )
     folder = config_dir()
     folder.mkdir(parents=True, exist_ok=True)
     target = _settings_path()
     tmp = target.with_suffix(".json.tmp")
-    payload = {"delay_ms": settings.delay_ms, "path": settings.path}
+    payload = {
+        "delay_ms": settings.delay_ms,
+        "path": settings.path,
+        "mode": settings.mode,
+    }
     tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     tmp.replace(target)
     return settings
@@ -147,17 +235,17 @@ def save(delay_ms: int, path: str | None = None) -> Settings:
 
 def should_apply(mixed: bool, both_playing: bool, settings: Settings | None = None) -> bool:
     """Extra delay only while a mixed house actually uses both engines."""
-    cfg = settings if settings is not None else load()
+    cfg = resolve(settings)
     return bool(mixed and both_playing and cfg.delay_ms > 0)
 
 
 def effective_ms(mixed: bool, both_playing: bool, settings: Settings | None = None) -> int:
-    cfg = settings if settings is not None else load()
+    cfg = resolve(settings)
     return cfg.delay_ms if should_apply(mixed, both_playing, cfg) else 0
 
 
 def effective_path(mixed: bool, both_playing: bool, settings: Settings | None = None) -> str:
-    cfg = settings if settings is not None else load()
+    cfg = resolve(settings)
     if not should_apply(mixed, both_playing, cfg):
         return cfg.path
     return cfg.path
@@ -165,14 +253,14 @@ def effective_path(mixed: bool, both_playing: bool, settings: Settings | None = 
 
 def owntone_delay_ms(mixed: bool, both_playing: bool, settings: Settings | None = None) -> int:
     """Milliseconds to insert in front of OwnTone's fifo, or 0."""
-    cfg = settings if settings is not None else load()
+    cfg = resolve(settings)
     if not should_apply(mixed, both_playing, cfg):
         return 0
     return cfg.delay_ms if cfg.path == PATH_OWNTONE else 0
 
 
 def pipewire_delay_ms(mixed: bool, both_playing: bool, settings: Settings | None = None) -> int:
-    cfg = settings if settings is not None else load()
+    cfg = resolve(settings)
     if not should_apply(mixed, both_playing, cfg):
         return 0
     return cfg.delay_ms if cfg.path == PATH_PIPEWIRE else 0
@@ -196,16 +284,54 @@ def pipewire_monitor(mixed: bool | None = None, both_playing: bool | None = None
     return pwhub.hub_monitor()
 
 
-def headroom_note(settings: Settings | None = None, applied_ms: int = 0) -> str:
+def headroom_note(
+    settings: Settings | None = None,
+    applied_ms: int = 0,
+    *,
+    start_buffer_ms: int | None = None,
+    raop_latency_ms: int | None = None,
+) -> str:
     """How this delay interacts with OwnTone's per-room offset / start buffer."""
-    cfg = settings if settings is not None else load()
+    stored_cfg = settings if settings is not None else load()
+    cfg = resolve(
+        stored_cfg,
+        start_buffer_ms=start_buffer_ms,
+        raop_latency_ms=raop_latency_ms,
+    )
     stored = cfg.delay_ms
     path = cfg.path
+    if stored_cfg.mode == MODE_AUTO:
+        ot = (
+            start_buffer_ms
+            if start_buffer_ms is not None
+            else _start_buffer_ms_safe()
+        )
+        pw = (
+            raop_latency_ms
+            if raop_latency_ms is not None
+            else pwhub.raop_latency_ms()
+        )
+        live = (
+            f"Auto: AirPlay 1 held back by {applied_ms} ms "
+            f"(OwnTone start_buffer {ot} ms − RAOP {pw} ms)."
+            if applied_ms
+            else (
+                f"Auto: will hold AirPlay 1 back by {stored} ms once both "
+                f"kinds play (OwnTone start_buffer {ot} ms − RAOP {pw} ms)."
+            )
+        )
+        return (
+            f"{live} Drag the slider to lock a manual value. Device residual "
+            "after the engines meet is still the per-room OwnTone slider "
+            "(behind i) — keep start_buffer_ms − |offset| around 500 ms."
+        )
     if stored <= 0:
         return (
             "No extra hub delay stored. Same-engine playback stays as it is. "
-            "The per-room OwnTone slider (behind i) is leftover trim and still "
-            "eats start_buffer_ms — keep start_buffer_ms − |offset| around 500 ms."
+            "Turn on Auto to close the measurable engine gap, or set a value "
+            "by ear. The per-room OwnTone slider (behind i) is leftover trim "
+            "and still eats start_buffer_ms — keep start_buffer_ms − |offset| "
+            "around 500 ms."
         )
     if path == PATH_PIPEWIRE:
         live = (
@@ -234,25 +360,61 @@ def headroom_note(settings: Settings | None = None, applied_ms: int = 0) -> str:
     )
 
 
-def status(*, mixed: bool, both_playing: bool) -> dict:
-    """Snapshot both UIs share. No pactl calls besides what the worker check does."""
-    cfg = load()
+def _start_buffer_ms_safe() -> int:
+    try:
+        import owntone
+
+        return int(owntone.start_buffer_ms())
+    except Exception:
+        return 2250
+
+
+def status(
+    *,
+    mixed: bool,
+    both_playing: bool,
+    start_buffer_ms: int | None = None,
+    raop_latency_ms: int | None = None,
+) -> dict:
+    """Snapshot both UIs share."""
+    stored_cfg = load()
+    if start_buffer_ms is None:
+        start_buffer_ms = _start_buffer_ms_safe()
+    if raop_latency_ms is None:
+        raop_latency_ms = pwhub.raop_latency_ms()
+    cfg = resolve(
+        stored_cfg,
+        start_buffer_ms=start_buffer_ms,
+        raop_latency_ms=raop_latency_ms,
+    )
     apply = should_apply(mixed, both_playing, cfg)
     applied_ms = effective_ms(mixed, both_playing, cfg)
     pw_running = pipewire_worker_running()
+    auto_ms = estimate_ms(start_buffer_ms, raop_latency_ms)
     return {
         "mixed": mixed,
         "both_playing": both_playing,
         "applied": apply,
         "applied_ms": applied_ms,
         "stored_ms": cfg.delay_ms,
+        "manual_ms": stored_cfg.delay_ms,
+        "mode": stored_cfg.mode,
+        "auto": stored_cfg.mode == MODE_AUTO,
+        "auto_ms": auto_ms,
+        "start_buffer_ms": int(start_buffer_ms),
+        "raop_latency_ms": int(raop_latency_ms),
         "path": cfg.path,
         "path_label": _path_label(cfg.path),
         "min_ms": MIN_MS,
         "max_ms": MAX_MS,
         "pipewire_worker": pw_running,
         "delayed_sink": pwhub.DELAYED_SINK,
-        "note": headroom_note(cfg, applied_ms),
+        "note": headroom_note(
+            stored_cfg,
+            applied_ms,
+            start_buffer_ms=start_buffer_ms,
+            raop_latency_ms=raop_latency_ms,
+        ),
         "audio_path": _audio_path_text(cfg.path, applied_ms, mixed),
         "idle_reason": _idle_reason(mixed, both_playing, cfg),
     }
@@ -292,7 +454,8 @@ def _audio_path_text(path: str, applied_ms: int, mixed: bool) -> str:
 def _idle_reason(mixed: bool, both_playing: bool, cfg: Settings) -> str:
     if not mixed:
         return "same-engine"
-    if cfg.delay_ms <= 0:
+    resolved = resolve(cfg)
+    if resolved.delay_ms <= 0:
         return "stored-zero"
     if not both_playing:
         return "one-engine-playing"
@@ -551,15 +714,25 @@ def _run_pipewire_worker(delay_ms: int) -> int:
     return 0
 
 
-def sync(*, mixed: bool, both_playing: bool) -> list[str]:
-    """Make the PipeWire side match the stored delay. Returns log lines.
+def sync(
+    *,
+    mixed: bool,
+    both_playing: bool,
+    start_buffer_ms: int | None = None,
+    raop_latency_ms: int | None = None,
+) -> list[str]:
+    """Make the PipeWire side match the resolved delay. Returns log lines.
 
     OwnTone-side delay is applied by bridge.start(delay_ms=...), because that
     process already owns the fifo. This function only starts or stops the
     extra null sink + PCM worker, and retargets loopbacks.
     """
     messages: list[str] = []
-    cfg = load()
+    cfg = resolve(
+        load(),
+        start_buffer_ms=start_buffer_ms,
+        raop_latency_ms=raop_latency_ms,
+    )
     want_pw = pipewire_delay_ms(mixed, both_playing, cfg)
     want_source = pwhub.delayed_monitor() if want_pw else pwhub.hub_monitor()
 

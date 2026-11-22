@@ -385,27 +385,45 @@ def hub_delay_status(current: list[Room] | None = None) -> dict:
     return hubdelay.status(
         mixed=mixed_engines(current),
         both_playing=both_engines_playing(current),
+        start_buffer_ms=start_buffer_ms(),
+        raop_latency_ms=pwhub.raop_latency_ms(),
     )
 
 
-def set_hub_delay(delay_ms: int, path: str | None = None,
-                  current: list[Room] | None = None) -> list[str]:
-    """Persist the hub delay and apply it if both engines are playing."""
-    settings = hubdelay.save(delay_ms, path)
+def set_hub_delay(
+    delay_ms: int,
+    path: str | None = None,
+    current: list[Room] | None = None,
+    mode: str | None = None,
+) -> list[str]:
+    """Persist the hub delay and apply it if both engines are playing.
+
+    mode="auto" recomputes from OwnTone start_buffer_ms − RAOP latency on
+    each sync. mode="manual" (or omitting mode when writing a slider value)
+    locks delay_ms. Existing hubdelay.json files without a mode key stay
+    manual so ear-tuned values are not overwritten.
+    """
+    if mode == hubdelay.MODE_AUTO:
+        estimated = hubdelay.estimate_ms(start_buffer_ms(), pwhub.raop_latency_ms())
+        settings = hubdelay.save(estimated, hubdelay.PATH_PIPEWIRE, hubdelay.MODE_AUTO)
+        label = (
+            f"Hub delay auto: {settings.delay_ms} ms on AirPlay 1 "
+            f"(start_buffer − RAOP)."
+        )
+    else:
+        settings = hubdelay.save(delay_ms, path, mode)
+        label = (
+            f"Hub delay stored: {settings.delay_ms} ms on {settings.path}"
+            + (" (manual)." if settings.mode == hubdelay.MODE_MANUAL else ".")
+        )
     try:
         ensure_hub()
     except pwhub.PactlError as extra:
-        return [
-            f"Hub delay stored: {settings.delay_ms} ms on {settings.path}.",
-            f"Could not apply it: {extra}",
-        ]
+        return [label, f"Could not apply it: {extra}"]
     if current is None:
         current = list_rooms()
     messages = sync_stream(current)
-    messages.insert(
-        0,
-        f"Hub delay stored: {settings.delay_ms} ms on {settings.path}.",
-    )
+    messages.insert(0, label)
     return messages
 
 
@@ -423,9 +441,15 @@ def sync_stream(current: list[Room] | None = None) -> list[str]:
         current = list_rooms()
     messages: list[str] = []
 
+    resolved = hubdelay.resolve(
+        hubdelay.load(),
+        start_buffer_ms=start_buffer_ms(),
+        raop_latency_ms=pwhub.raop_latency_ms(),
+    )
+
     if any_owntone_on(current):
         ot_delay = hubdelay.owntone_delay_ms(
-            mixed_engines(current), both_engines_playing(current)
+            mixed_engines(current), both_engines_playing(current), resolved
         )
         if not bridge.is_running():
             try:
@@ -469,6 +493,8 @@ def sync_stream(current: list[Room] | None = None) -> list[str]:
             hubdelay.sync(
                 mixed=mixed_engines(current),
                 both_playing=both_engines_playing(current),
+                start_buffer_ms=start_buffer_ms(),
+                raop_latency_ms=pwhub.raop_latency_ms(),
             )
         )
     except hubdelay.DelayError as exc:

@@ -69,15 +69,18 @@ class SettingsTests(unittest.TestCase):
         cfg = hubdelay.load()
         self.assertEqual(cfg.delay_ms, 0)
         self.assertEqual(cfg.path, "pipewire")
+        self.assertEqual(cfg.mode, hubdelay.MODE_AUTO)
 
     def test_roundtrip_and_clamp(self) -> None:
         hubdelay.save(800, "pipewire")
         cfg = hubdelay.load()
         self.assertEqual(cfg.delay_ms, 800)
         self.assertEqual(cfg.path, "pipewire")
+        self.assertEqual(cfg.mode, hubdelay.MODE_MANUAL)
         path = Path(self.tmp.name) / "hubdelay.json"
         data = json.loads(path.read_text())
         self.assertEqual(data["delay_ms"], 800)
+        self.assertEqual(data["mode"], "manual")
         hubdelay.save(-10, "nope")
         cfg = hubdelay.load()
         self.assertEqual(cfg.delay_ms, 0)
@@ -87,11 +90,22 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(cfg.delay_ms, hubdelay.MAX_MS)
         self.assertEqual(cfg.path, "owntone")
 
+    def test_legacy_file_without_mode_is_manual(self) -> None:
+        path = Path(self.tmp.name) / "hubdelay.json"
+        path.write_text(
+            json.dumps({"delay_ms": 500, "path": "pipewire"}) + "\n",
+            encoding="utf-8",
+        )
+        cfg = hubdelay.load()
+        self.assertEqual(cfg.mode, hubdelay.MODE_MANUAL)
+        self.assertEqual(cfg.delay_ms, 500)
+
     def test_corrupt_file_is_default(self) -> None:
         Path(self.tmp.name).mkdir(parents=True, exist_ok=True)
         (Path(self.tmp.name) / "hubdelay.json").write_text("{not json", encoding="utf-8")
         cfg = hubdelay.load()
         self.assertEqual(cfg.delay_ms, 0)
+        self.assertEqual(cfg.mode, hubdelay.MODE_AUTO)
 
 
 class GatingTests(unittest.TestCase):
@@ -235,7 +249,9 @@ class SafetyTests(unittest.TestCase):
     def test_readme_ties_b_to_offset_trim(self) -> None:
         readme = Path("README.md").read_text(encoding="utf-8")
         self.assertIn("Delay the faster path", readme)
-        self.assertIn("leftover trim", readme)
+        self.assertIn("leftover device trim", readme)
+        self.assertIn("start_buffer_ms − PipeWire RAOP latency", readme)
+        self.assertIn("arrivalToRenderLatencyMs", readme)
         self.assertIn("sess.latency.msec", readme)
         self.assertIn("hubdelay.json", readme)
         self.assertIn("Same-kind setup", readme)
@@ -281,10 +297,87 @@ class SafetyTests(unittest.TestCase):
             patch("rooms.hubdelay.sync", return_value=[]) as sync,
             patch("rooms.bridge.is_running", return_value=False),
             patch("rooms.bridge.start") as start,
+            patch("rooms.start_buffer_ms", return_value=2250),
+            patch("rooms.pwhub.raop_latency_ms", return_value=1500),
         ):
             rooms.sync_stream(current)
         start.assert_not_called()
-        sync.assert_called_once_with(mixed=False, both_playing=False)
+        sync.assert_called_once()
+        kwargs = sync.call_args.kwargs
+        self.assertFalse(kwargs["mixed"])
+        self.assertFalse(kwargs["both_playing"])
+
+
+class AutoEstimateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["AIRPLAYHUB_CONFIG"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.pop("AIRPLAYHUB_CONFIG", None))
+
+    def test_estimate_is_start_buffer_minus_raop(self) -> None:
+        self.assertEqual(hubdelay.estimate_ms(2250, 1500), 750)
+        self.assertEqual(hubdelay.estimate_ms(1500, 1500), 0)
+        self.assertEqual(hubdelay.estimate_ms(1000, 1500), 0)
+        self.assertEqual(hubdelay.estimate_ms(6000, 1500), hubdelay.MAX_MS)
+
+    def test_resolve_auto_uses_estimate_on_pipewire(self) -> None:
+        hubdelay.save(0, "owntone", mode=hubdelay.MODE_AUTO)
+        cfg = hubdelay.resolve(
+            hubdelay.load(),
+            start_buffer_ms=2500,
+            raop_latency_ms=1500,
+        )
+        self.assertEqual(cfg.mode, hubdelay.MODE_AUTO)
+        self.assertEqual(cfg.path, "pipewire")
+        self.assertEqual(cfg.delay_ms, 1000)
+
+    def test_resolve_manual_keeps_slider_value(self) -> None:
+        hubdelay.save(400, "owntone", mode=hubdelay.MODE_MANUAL)
+        cfg = hubdelay.resolve(
+            hubdelay.load(),
+            start_buffer_ms=2500,
+            raop_latency_ms=1500,
+        )
+        self.assertEqual(cfg.delay_ms, 400)
+        self.assertEqual(cfg.path, "owntone")
+
+    def test_fresh_install_status_is_auto(self) -> None:
+        current = [
+            _room("Kitchen", "pipewire"),
+            _room("Bedroom", "owntone"),
+        ]
+        with (
+            patch("rooms.start_buffer_ms", return_value=2250),
+            patch("rooms.pwhub.raop_latency_ms", return_value=1500),
+        ):
+            st = rooms.hub_delay_status(current)
+        self.assertTrue(st["auto"])
+        self.assertEqual(st["stored_ms"], 750)
+        self.assertEqual(st["applied_ms"], 750)
+        self.assertEqual(st["auto_ms"], 750)
+        self.assertIn("Auto:", st["note"])
+
+    def test_set_hub_delay_auto_label(self) -> None:
+        with (
+            patch("rooms.ensure_hub"),
+            patch("rooms.sync_stream", return_value=[]),
+            patch("rooms.start_buffer_ms", return_value=2250),
+            patch("rooms.pwhub.raop_latency_ms", return_value=1500),
+        ):
+            lines = rooms.set_hub_delay(0, mode="auto", current=[])
+        cfg = hubdelay.load()
+        self.assertEqual(cfg.mode, hubdelay.MODE_AUTO)
+        self.assertEqual(cfg.delay_ms, 750)
+        self.assertTrue(any("auto: 750 ms" in line for line in lines))
+
+    def test_raop_latency_fraction_and_fallback(self) -> None:
+        import pwhub
+
+        self.assertEqual(pwhub._latency_ms_from_fraction("66150/44100"), 1500)
+        self.assertEqual(pwhub._latency_ms_from_usec("1500000"), 1500)
+        with patch("pwhub.run", side_effect=pwhub.PactlError("no")):
+            self.assertEqual(pwhub.raop_latency_ms(), pwhub.DEFAULT_RAOP_LATENCY_MS)
 
 
 if __name__ == "__main__":
