@@ -256,11 +256,16 @@ Loopback `latency_msec` stays at the existing default; RAOP `sess.latency.msec`
 is never set.
 
 It applies only while both engines are actually playing. Same-engine houses,
-and mixed houses with only one engine on, stay at zero extra delay. Default
-stored value is 0. The number is set by ear; a HomePod's device buffer still
-cannot be read from outside. Per-room `offset_ms` and `start_buffer_ms` remain
-residual trim — prefer hub delay on AirPlay 1 over dragging a HomePod toward
-earlier, which eats start-buffer headroom.
+and mixed houses with only one engine on, stay at zero extra delay.
+
+**Auto mode** (default when no `hubdelay.json` exists) sets the delay to
+`start_buffer_ms − RAOP latency` on the AirPlay 1 path — the measurable
+engine gap. Manual mode locks a slider value. Do **not** add a HomePod's
+`arrivalToRenderLatencyMs`: receivers already self-compensate it; applying
+it over-compensates (Music Assistant / airplay-cli). Per-room `offset_ms`
+remains residual device trim — prefer hub delay on AirPlay 1 over dragging a
+HomePod toward earlier, which eats start-buffer headroom. Existing
+`hubdelay.json` files without a `mode` key stay manual.
 
 **But both ways of making a HomePod earlier draw on the same buffer**, so they
 fight each other. `start_buffer_ms = 1250` clipped on its own, and offset -2000

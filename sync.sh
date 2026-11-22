@@ -64,12 +64,16 @@ try:
     data = json.loads(path.read_text())
     ms = int(data.get("delay_ms") or 0)
     which = data.get("path") or "pipewire"
+    mode = data.get("mode") or "manual"
     extra = "AirPlay 1 / PipeWire" if which == "pipewire" else "AirPlay 2 / OwnTone"
-    print(f"    {ms} ms on {extra}")
+    if mode == "auto":
+        print(f"    auto on {extra} (start_buffer − RAOP; last estimate {ms} ms)")
+    else:
+        print(f"    {ms} ms on {extra} (manual)")
     print("    Applies only while both kinds of room play. 0 ms = off.")
     print("    Not sess.latency.msec / loopback latency / filter-chain.")
 except Exception:
-    print("    none stored (0 ms)")
+    print("    none stored — app defaults to auto (start_buffer − RAOP)")
 PY
   echo
   local down up

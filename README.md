@@ -145,19 +145,22 @@ AirPlayHub
   └─► parec ─► fifo ─► OwnTone ─► AirPlay 2
 ```
 
-**AirPlay 1 (PipeWire)** is the default path to delay. HomePods usually lag;
-holding the kitchen and the porch back at the hub is how they meet the
-bedroom, without eating OwnTone's start buffer. The per-room slider behind
-**i** stays as leftover trim.
+**Auto** (default on a fresh install) sets the delay to
 
-**Same-kind setup, or only one engine playing:** the stored value is idle.
-Nothing extra is delayed. Default is 0 ms.
+`OwnTone start_buffer_ms − PipeWire RAOP latency`
 
-Set it by ear (clicks or a ping tone). A HomePod's own buffer cannot be read
-from outside; automatic measurement would need a microphone and is not in
-this version.
+on the AirPlay 1 path — the measurable engine gap when RAOP runs at PipeWire
+defaults and OwnTone at its start buffer. Drag the slider to lock a **manual**
+value. The per-room slider behind **i** stays as leftover device trim.
 
-The value is saved in `~/.config/airplay-hub/hubdelay.json`.
+Do not add a HomePod's `arrivalToRenderLatencyMs`: receivers already
+self-compensate that figure; applying it over-compensates.
+
+**Same-kind setup, or only one engine playing:** the value is idle. Nothing
+extra is delayed.
+
+The setting is saved in `~/.config/airplay-hub/hubdelay.json`. Existing files
+without a `mode` key stay manual so an ear-tuned value is not overwritten.
 
 ## Troubleshooting
 

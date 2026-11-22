@@ -32,6 +32,7 @@ from PyQt6.QtCore import Qt, QTimer, QProcess
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -607,11 +608,12 @@ class RoomRow(QFrame):
 
 
 class HubDelayBox(QFrame):
-    """Delay-to-slowest: hold the faster hub feed back, by ear.
+    """Delay-to-slowest: hold the faster hub feed back.
 
-    Shown only when the house has both engines. The value is stored even when
-    only one engine is playing; it takes effect once both are on. Lives here
-    rather than behind i so it is clearly a hub setting, not a per-room trim.
+    Auto closes the measurable engine gap (OwnTone start_buffer − RAOP
+    latency). Manual locks a value for residual trim by ear. Shown only when
+    the house has both engines. Lives here rather than behind i so it is
+    clearly a hub setting, not a per-room trim.
     """
 
     def __init__(self, window: "MainWindow"):
@@ -631,6 +633,11 @@ class HubDelayBox(QFrame):
         self.explain.setStyleSheet("color: #6f8299; font-size: 11px;")
         self.explain.setWordWrap(True)
         col.addWidget(self.explain)
+
+        self.auto = QCheckBox("Auto (start_buffer − RAOP latency)")
+        self.auto.setStyleSheet("color: #dbe6f0; font-size: 12px;")
+        self.auto.toggled.connect(self._on_auto)
+        col.addWidget(self.auto)
 
         path_row = QHBoxLayout()
         path_lab = QLabel("Delay")
@@ -678,12 +685,15 @@ class HubDelayBox(QFrame):
             return
         self._busy = True
         try:
+            self.auto.setChecked(bool(st.get("auto")))
             self.slider.setRange(int(st["min_ms"]), int(st["max_ms"]))
             if not self.slider.isSliderDown():
                 self.slider.setValue(int(st["stored_ms"]))
             idx = self.path.findData(st["path"])
             if idx >= 0:
                 self.path.setCurrentIndex(idx)
+            self.path.setEnabled(not bool(st.get("auto")))
+            self.slider.setEnabled(not bool(st.get("auto")))
             self.explain.setText(str(st["note"]))
             self.path_line.setText(str(st["audio_path"]))
             self._render_value(st)
@@ -695,6 +705,20 @@ class HubDelayBox(QFrame):
             st = rooms.hub_delay_status(list(self.window_ref.rooms.values()))
         stored = int(st.get("stored_ms") or 0)
         applied = int(st.get("applied_ms") or 0)
+        if st.get("auto"):
+            ot = st.get("start_buffer_ms")
+            pw = st.get("raop_latency_ms")
+            if applied:
+                self.value.setText(
+                    f"auto {applied} ms applied ({ot} − {pw})"
+                )
+            elif stored:
+                self.value.setText(
+                    f"auto {stored} ms — applies when both kinds play ({ot} − {pw})"
+                )
+            else:
+                self.value.setText(f"auto 0 ms ({ot} − {pw})")
+            return
         if stored == 0:
             self.value.setText("no extra delay")
         elif applied:
@@ -714,17 +738,31 @@ class HubDelayBox(QFrame):
     def _on_path(self) -> None:
         if self._busy:
             return
-        self._commit()
+        self._commit(manual=True)
+
+    def _on_auto(self, checked: bool) -> None:
+        if self._busy:
+            return
+        if checked:
+            self._commit(mode="auto")
+        else:
+            self._commit(manual=True)
 
     def _on_commit(self) -> None:
         if self._busy:
             return
-        self._commit()
+        self._commit(manual=True)
 
-    def _commit(self) -> None:
+    def _commit(self, *, manual: bool = False, mode: str | None = None) -> None:
         path = self.path.currentData()
         try:
-            for line in rooms.set_hub_delay(self.slider.value(), path):
+            if mode == "auto" or (not manual and self.auto.isChecked()):
+                lines = rooms.set_hub_delay(0, path, mode="auto")
+            else:
+                lines = rooms.set_hub_delay(
+                    self.slider.value(), path, mode="manual"
+                )
+            for line in lines:
                 self.window_ref.log(line)
         except Exception as exc:  # backend must not take the window down
             self.window_ref.log(f"Hub delay failed: {exc}")

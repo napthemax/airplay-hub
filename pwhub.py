@@ -30,6 +30,9 @@ HUB_DESC = "AirPlay Hub"
 DELAYED_SINK = "AirPlayHubDelayed"
 DELAYED_DESC = "AirPlay Hub (delayed)"
 DEFAULT_LATENCY_MS = 400
+# PipeWire module-raop-sink default for raop.latency.ms. Used when no sink
+# reports a latency yet (idle discovery, or pactl without properties).
+DEFAULT_RAOP_LATENCY_MS = 1500
 
 
 class PactlError(RuntimeError):
@@ -131,6 +134,125 @@ def raop_sinks() -> list[Sink]:
 
 def sink_exists(name: str) -> bool:
     return any(s.name == name for s in list_sinks())
+
+
+def _latency_ms_from_fraction(raw: str) -> int | None:
+    """Parse PipeWire node.latency values like '66150/44100' into milliseconds."""
+    text = (raw or "").strip().strip('"')
+    if "/" not in text:
+        return None
+    num_s, den_s = text.split("/", 1)
+    try:
+        num = float(num_s)
+        den = float(den_s)
+    except ValueError:
+        return None
+    if den <= 0 or num < 0:
+        return None
+    return int(round(1000.0 * num / den))
+
+
+def _latency_ms_from_usec(raw: str) -> int | None:
+    try:
+        usec = int(str(raw).strip().split()[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if usec < 0:
+        return None
+    return int(round(usec / 1000.0))
+
+
+def _raop_latency_from_json() -> int | None:
+    try:
+        data = json.loads(run(["pactl", "-f", "json", "list", "sinks"]))
+    except (PactlError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    found: list[int] = []
+    for entry in data:
+        name = str(entry.get("name") or "")
+        if "raop" not in name.lower():
+            continue
+        props = entry.get("properties") or {}
+        if not isinstance(props, dict):
+            props = {}
+        for key in ("node.latency", "port.latency", "device.latency"):
+            parsed = _latency_ms_from_fraction(str(props.get(key) or ""))
+            if parsed is not None and parsed > 0:
+                found.append(parsed)
+                break
+        if found and found[-1]:
+            continue
+        configured = entry.get("configured_latency")
+        if isinstance(configured, dict):
+            # Newer libpulse: {"value": N} in usec, or nested channel map.
+            raw = configured.get("value", configured.get("usec"))
+            parsed = _latency_ms_from_usec(str(raw)) if raw is not None else None
+            if parsed is not None and parsed > 0:
+                found.append(parsed)
+                continue
+        elif configured is not None:
+            parsed = _latency_ms_from_usec(str(configured))
+            if parsed is not None and parsed > 0:
+                found.append(parsed)
+    if not found:
+        return None
+    # Prefer the median when several RAOP sinks disagree slightly.
+    found.sort()
+    return found[len(found) // 2]
+
+
+def _raop_latency_from_text() -> int | None:
+    try:
+        text = run(["pactl", "list", "sinks"])
+    except PactlError:
+        return None
+    found: list[int] = []
+    in_raop = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Sink #"):
+            in_raop = False
+            continue
+        if stripped.startswith("Name:"):
+            in_raop = "raop" in stripped.lower()
+            continue
+        if not in_raop:
+            continue
+        if "node.latency" in stripped and "=" in stripped:
+            parsed = _latency_ms_from_fraction(stripped.split("=", 1)[1])
+            if parsed is not None and parsed > 0:
+                found.append(parsed)
+                continue
+        if stripped.lower().startswith("latency:"):
+            # "Latency: 0 usec, configured 1500000 usec"
+            match = re.search(r"configured\s+(\d+)\s*usec", stripped, re.I)
+            if match:
+                parsed = _latency_ms_from_usec(match.group(1))
+                if parsed is not None and parsed > 0:
+                    found.append(parsed)
+    if not found:
+        return None
+    found.sort()
+    return found[len(found) // 2]
+
+
+def raop_latency_ms() -> int:
+    """Best-effort AirPlay 1 path latency in milliseconds.
+
+    Reads what PipeWire reports on RAOP sinks. Falls back to the module default
+    (1500 ms) when nothing is up yet — discovery creates sinks lazily, and an
+    idle sink often reports 0 measured latency.
+    """
+    for reader in (_raop_latency_from_json, _raop_latency_from_text):
+        try:
+            value = reader()
+        except Exception:
+            value = None
+        if value is not None and value > 0:
+            return int(value)
+    return DEFAULT_RAOP_LATENCY_MS
 
 
 def set_sink_volume(name: str, pct: int) -> None:

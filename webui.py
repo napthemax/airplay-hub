@@ -180,6 +180,7 @@ PAGE = """<!doctype html>
 <div id="hubdelay" class="hubdelay" hidden>
   <h2>Hold back the faster path</h2>
   <p id="hubdelay-note"></p>
+  <label><input type="checkbox" id="hubdelay-auto"> Auto (start_buffer − RAOP latency)</label>
   <label for="hubdelay-path">Delay</label>
   <select id="hubdelay-path">
     <option value="pipewire">AirPlay 1 (PipeWire) — usually ahead</option>
@@ -350,14 +351,24 @@ function render(data) {
     document.getElementById("hubdelay-path-text").textContent = delay.audio_path || "";
     const sel = document.getElementById("hubdelay-path");
     const ms = document.getElementById("hubdelay-ms");
+    const auto = document.getElementById("hubdelay-auto");
     if (!draggingDelay) {
+      auto.checked = !!delay.auto;
       if (document.activeElement !== sel) sel.value = delay.path || "pipewire";
       if (document.activeElement !== ms) {
         ms.min = delay.min_ms; ms.max = delay.max_ms; ms.value = delay.stored_ms;
       }
+      sel.disabled = !!delay.auto;
+      ms.disabled = !!delay.auto;
     }
     const now = document.getElementById("hubdelay-now");
-    if (delay.applied_ms) now.textContent = delay.applied_ms + " ms applied";
+    if (delay.auto) {
+      const bits = delay.start_buffer_ms + " − " + delay.raop_latency_ms;
+      if (delay.applied_ms) now.textContent = "auto " + delay.applied_ms + " ms applied (" + bits + ")";
+      else if (delay.stored_ms && delay.idle_reason === "one-engine-playing")
+        now.textContent = "auto " + delay.stored_ms + " ms — applies when both kinds play (" + bits + ")";
+      else now.textContent = "auto " + (delay.stored_ms || 0) + " ms (" + bits + ")";
+    } else if (delay.applied_ms) now.textContent = delay.applied_ms + " ms applied";
     else if (delay.stored_ms && delay.idle_reason === "one-engine-playing")
       now.textContent = delay.stored_ms + " ms stored — applies when both kinds play";
     else if (delay.stored_ms) now.textContent = delay.stored_ms + " ms stored";
@@ -405,14 +416,22 @@ document.getElementById("hubdelay-ms").oninput = () => {
   draggingDelay = true;
   document.getElementById("hubdelay-now").textContent = document.getElementById("hubdelay-ms").value + " ms";
 };
-async function commitDelay() {
+async function commitDelay(opts) {
   draggingDelay = false;
+  const auto = document.getElementById("hubdelay-auto").checked;
   const delay_ms = +document.getElementById("hubdelay-ms").value;
   const path = document.getElementById("hubdelay-path").value;
-  try { render(await api("/api/hubdelay", {delay_ms, path})); } catch (err) { lost(); }
+  const body = opts && opts.mode
+    ? {delay_ms, path, mode: opts.mode}
+    : {delay_ms, path, mode: auto ? "auto" : "manual"};
+  try { render(await api("/api/hubdelay", body)); } catch (err) { lost(); }
 }
-document.getElementById("hubdelay-ms").onchange = commitDelay;
-document.getElementById("hubdelay-path").onchange = commitDelay;
+document.getElementById("hubdelay-ms").onchange = () => commitDelay({mode: "manual"});
+document.getElementById("hubdelay-path").onchange = () => commitDelay({mode: "manual"});
+document.getElementById("hubdelay-auto").onchange = () => {
+  const on = document.getElementById("hubdelay-auto").checked;
+  commitDelay({mode: on ? "auto" : "manual"});
+};
 
 document.getElementById("sync-clicks").onclick = async () => {
   const btn = document.getElementById("sync-clicks");
@@ -552,6 +571,7 @@ class Handler(BaseHTTPRequestHandler):
                 rooms.set_hub_delay(
                     int(body.get("delay_ms", 0)),
                     body.get("path"),
+                    mode=body.get("mode"),
                 )
             except Exception as extra:
                 self._send(500, {"error": str(extra)})
